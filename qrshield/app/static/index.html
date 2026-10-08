@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>QRshield - Three-Layer Quishing & Physical Tamper Detector</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div class="container header-inner">
+      <div class="brand">
+        <div class="brand-logo">🛡️</div>
+        <div class="brand-text">
+          <h1>QRshield</h1>
+          <p>Three-Layer Quishing Detector | Team Black Sparrow (SPIT Mumbai)</p>
+        </div>
+      </div>
+      <nav class="nav-tabs">
+        <button class="nav-btn active" onclick="switchTab('scanner')">Scan & Verify</button>
+        <button class="nav-btn" onclick="switchTab('issuer')">Issuer PKI Portal</button>
+        <button class="nav-btn" onclick="switchTab('admin')">Admin Queue</button>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- Live Demo Quick-Test Bar (Section 13) -->
+    <section class="scenario-bar">
+      <div class="scenario-title">⚡ Live Demo Script Scenarios (Section 13)</div>
+      <div class="scenario-btns">
+        <button class="scenario-btn" onclick="loadDemoScenario(1)">1. Clean Unsigned (SPIT)</button>
+        <button class="scenario-btn" onclick="loadDemoScenario(2)">2. Phishing Zero-Day (PhonePe)</button>
+        <button class="scenario-btn" onclick="loadDemoScenario(3)">3. Signed City Parking (Valid PKI)</button>
+        <button class="scenario-btn" onclick="loadDemoScenario(4)">4. Physical Sticker Swap (Tamper CV)</button>
+        <button class="scenario-btn" onclick="loadDemoScenario(5)">5. Forged Token (Crypto Invalid)</button>
+        <button class="scenario-btn" onclick="loadDemoScenario(6)">6. Feedback Loop (Report & Retrain)</button>
+      </div>
+    </section>
+
+    <!-- Tab 1: Scanner View -->
+    <div id="tab-scanner" class="tab-pane active">
+      <div class="main-grid">
+        <!-- Left: Upload & Camera Controls -->
+        <div class="card">
+          <div class="card-header">
+            <h2>Scan QR Code</h2>
+            <span id="scan-status" style="font-size: 0.8rem; color: var(--text-muted);">Ready</span>
+          </div>
+
+          <div class="capture-box" onclick="document.getElementById('file-input').click()">
+            <div style="font-size: 2.2rem; margin-bottom: 8px;">📷</div>
+            <p style="font-weight: 600;">Upload photo or capture from camera</p>
+            <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;">Supports JPG, PNG, WEBP</p>
+            <input type="file" id="file-input" accept="image/*" capture="environment" onchange="handleFileSelect(event)">
+          </div>
+
+          <div class="preview-container" id="preview-box">
+            <img id="img-preview" src="" alt="Scan Preview">
+          </div>
+
+          <!-- Multi-angle second photo prompt (F21) -->
+          <div id="second-photo-box" style="display: none; margin-top: 14px; padding: 12px; background: var(--bg-card); border: 1px dashed var(--warn-border); border-radius: 8px;">
+            <p style="font-size: 0.82rem; color: #fbbf24; font-weight: 600;">📐 Inconclusive: Take 2nd Photo from ~30° angle</p>
+            <input type="file" id="file-input2" accept="image/*" capture="environment" style="margin-top: 8px; font-size: 0.8rem;" onchange="handleSecondFileSelect(event)">
+          </div>
+
+          <div class="webcam-container" id="webcam-box">
+            <video id="webcam" autoplay playsinline></video>
+          </div>
+
+          <div class="btn-group">
+            <button class="btn btn-secondary" id="webcam-btn" onclick="toggleWebcam()">🎥 Webcam</button>
+            <button class="btn btn-primary" id="scan-btn" onclick="performScan()" disabled>⚡ Scan & Analyze</button>
+          </div>
+
+          <div id="quality-hints" style="margin-top: 14px; font-size: 0.8rem; color: #fbbf24; display: none;"></div>
+        </div>
+
+        <!-- Right: Layered Verdict Card -->
+        <div class="card" id="result-card">
+          <div class="card-header">
+            <h2>Three-Layer Security Verdict</h2>
+            <span id="scan-latency" style="font-size: 0.75rem; color: var(--text-muted);"></span>
+          </div>
+
+          <!-- Initial empty state -->
+          <div id="verdict-placeholder" style="text-align: center; padding: 50px 20px; color: var(--text-muted);">
+            <div style="font-size: 2.5rem; margin-bottom: 10px;">🔍</div>
+            <p>Upload or capture a QR code to run URL ML, CV Physical Tamper, and Ed25519 PKI verification.</p>
+          </div>
+
+          <!-- Active Verdict Details (Hidden by default) -->
+          <div id="verdict-content" style="display: none;">
+            <div id="verdict-banner" class="verdict-banner SAFE">
+              <div class="verdict-title">
+                <span id="verdict-icon" style="font-size: 1.8rem;">🛡️</span>
+                <div>
+                  <h3 id="verdict-text">SAFE</h3>
+                  <div id="certified-badge" class="certified-badge" style="display: none;">
+                    ✓ QRSHIELD CERTIFIED
+                  </div>
+                </div>
+              </div>
+              <div style="text-align: right;">
+                <div style="font-size: 0.75rem; color: var(--text-muted);">AGGREGATE RISK</div>
+                <div id="verdict-risk" style="font-size: 1.25rem; font-weight: 800;">0.05</div>
+              </div>
+            </div>
+
+            <!-- Plain-Language Reasons (F31) -->
+            <ul id="reasons-list" class="reasons-list"></ul>
+
+            <!-- Three Layer Sub-Cards -->
+            <div class="layer-cards">
+              <!-- M1: URL ML -->
+              <div class="layer-card">
+                <div class="layer-top">
+                  <span class="layer-name">M1: URL / Payload ML</span>
+                  <span id="url-score-pill" class="layer-score-pill">Risk: 0.05</span>
+                </div>
+                <div style="font-size: 0.8rem; color: var(--text-muted);">
+                  Payload Type: <strong id="url-type-badge">url</strong>
+                </div>
+                <ul id="url-signals" class="signals-list"></ul>
+              </div>
+
+              <!-- M2: Visual Tamper CV -->
+              <div class="layer-card">
+                <div class="layer-top">
+                  <span class="layer-name">M2: Visual Tamper (CV)</span>
+                  <span id="cv-score-pill" class="layer-score-pill">Tamper: 0.10</span>
+                </div>
+                <div style="font-size: 0.8rem; color: var(--text-muted);">
+                  Status: <strong id="cv-status-badge">ok</strong>
+                </div>
+                <ul id="cv-signals" class="signals-list"></ul>
+                <!-- Grad-CAM Heatmap overlay -->
+                <div class="heatmap-box" id="heatmap-container" style="display: none;">
+                  <p style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 4px;">Grad-CAM Perimeter Saliency Map:</p>
+                  <img id="heatmap-img" src="" alt="Grad-CAM Saliency">
+                </div>
+              </div>
+
+              <!-- M3: Crypto PKI -->
+              <div class="layer-card">
+                <div class="layer-top">
+                  <span class="layer-name">M3: Ed25519 PKI Signature</span>
+                  <span id="crypto-status-pill" class="layer-score-pill">Status: None</span>
+                </div>
+                <div id="crypto-details" style="font-size: 0.82rem; margin-top: 4px; color: var(--text-muted);">
+                  Unsigned QR code (falls to URL & CV checks).
+                </div>
+              </div>
+            </div>
+
+            <!-- Safe Interaction Link Box (F33) -->
+            <div class="safe-link-bar">
+              <div style="font-size: 0.78rem; text-transform: uppercase; color: var(--text-muted); font-weight: 700;">
+                Destination Link (Never auto-opened)
+              </div>
+              <div class="payload-display" id="decoded-payload"></div>
+
+              <div id="safety-confirm-box" style="display: none; margin: 8px 0; font-size: 0.82rem;">
+                <label style="color: #fbbf24; cursor: pointer;">
+                  <input type="checkbox" id="confirm-open-checkbox"> I understand the risk and wish to proceed
+                </label>
+              </div>
+
+              <div class="action-row">
+                <button class="btn btn-secondary" onclick="openReportModal()" style="font-size: 0.8rem;">
+                  🚩 Report Feedback
+                </button>
+                <button class="btn btn-primary" id="open-link-btn" onclick="handleOpenLink()" style="font-size: 0.8rem;">
+                  🔗 Open Link
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab 2: Issuer PKI Portal (F27) -->
+    <div id="tab-issuer" class="tab-pane">
+      <div class="card" style="max-width: 650px; margin: 0 auto;">
+        <div class="card-header">
+          <h2>Issuer PKI Portal (F27)</h2>
+          <span style="font-size: 0.8rem; color: var(--accent-cyan);">Ed25519 Signing Service</span>
+        </div>
+        <p style="font-size: 0.84rem; color: var(--text-muted); margin-bottom: 16px;">
+          Generate provably authentic, domain-bound QR codes with Ed25519 signatures embedded in URL parameters.
+        </p>
+
+        <div class="form-group">
+          <label>Select Registered Business</label>
+          <select id="issuer-select" class="form-control" onchange="onIssuerSelected()">
+            <option value="citypark-01">Mumbai Smart City Parking (pay.citypark.example)</option>
+            <option value="spit-admit">SPIT Admissions Authority (spit.ac.in)</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Target Domain-Bound URL</label>
+          <input type="text" id="issuer-url" class="form-control" value="https://pay.citypark.example/m/42">
+        </div>
+
+        <div class="form-group">
+          <label>Location ID / Terminal</label>
+          <input type="text" id="issuer-loc" class="form-control" value="andheri-west-counter-04">
+        </div>
+
+        <div class="form-group">
+          <label>Validity (Hours)</label>
+          <input type="number" id="issuer-validity" class="form-control" value="48">
+        </div>
+
+        <div class="btn-group">
+          <button class="btn btn-primary" onclick="generateSignedQR()">🔏 Generate Signed QR</button>
+          <button class="btn btn-secondary" style="color: #f87171;" onclick="revokeCurrentIssuer()">⚠️ Revoke Issuer Key</button>
+        </div>
+
+        <div id="signed-qr-result" style="display: none; margin-top: 20px; text-align: center; border-top: 1px solid var(--border-color); padding-top: 16px;">
+          <h4 style="font-size: 0.95rem; margin-bottom: 8px;">Provably Authentic Signed QR Code</h4>
+          <img id="signed-qr-img" src="" alt="Signed QR" style="max-width: 220px; border-radius: 8px; border: 1px solid var(--border-color);">
+          <div style="margin-top: 10px;">
+            <a id="download-qr-btn" class="btn btn-secondary" download="signed_qr.png" href="" style="display: inline-flex; width: auto;">
+              ⬇️ Download PNG
+            </a>
+          </div>
+          <div class="payload-display" id="signed-url-display" style="margin-top: 12px; text-align: left;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab 3: Admin Review Queue (F34, F35) -->
+    <div id="tab-admin" class="tab-pane">
+      <div class="card">
+        <div class="card-header">
+          <h2>Admin Feedback Queue & Continuous Learning (F34, F35)</h2>
+          <button class="btn btn-secondary" onclick="loadAdminReports()" style="font-size: 0.8rem;">🔄 Refresh</button>
+        </div>
+        <p style="font-size: 0.84rem; color: var(--text-muted); margin-bottom: 16px;">
+          Human-in-the-loop review protecting ML pipeline against data poisoning. Approved samples feed continuous retraining.
+        </p>
+
+        <div style="overflow-x: auto;">
+          <table style="width: 100%; border-collapse: collapse; font-size: 0.84rem;">
+            <thead>
+              <tr style="border-bottom: 1px solid var(--border-color); text-align: left; color: var(--text-muted);">
+                <th style="padding: 10px;">Payload URL</th>
+                <th style="padding: 10px;">User Label</th>
+                <th style="padding: 10px;">Note</th>
+                <th style="padding: 10px;">Status</th>
+                <th style="padding: 10px;">Action</th>
+              </tr>
+            </thead>
+            <tbody id="reports-table-body">
+              <tr>
+                <td colspan="5" style="text-align: center; padding: 24px; color: var(--text-muted);">No reports pending review.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Report Feedback Modal Dialog (F34) -->
+  <div id="report-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 200; align-items: center; justify-content: center;">
+    <div class="card" style="width: 90%; max-width: 450px;">
+      <div class="card-header">
+        <h2>Report Suspicious / False-Alarm QR</h2>
+        <button onclick="closeReportModal()" style="background: none; border: none; color: var(--text-muted); font-size: 1.2rem; cursor: pointer;">✕</button>
+      </div>
+      <div class="form-group">
+        <label>Classification</label>
+        <select id="report-label" class="form-control">
+          <option value="phishing">Phishing / Malicious Link</option>
+          <option value="tampered">Physical Sticker Overlay</option>
+          <option value="benign">Legitimate (False Positive)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Optional Notes</label>
+        <textarea id="report-note" class="form-control" rows="3" placeholder="Context (e.g. found on parking meter in Andheri)"></textarea>
+      </div>
+      <div class="btn-group">
+        <button class="btn btn-secondary" onclick="closeReportModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="submitFeedbackReport()">Submit Feedback</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
