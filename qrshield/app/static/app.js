@@ -449,6 +449,43 @@ async function loadDemoScenario(num) {
     selectedFile = new File([blob], `scenario_${num}.png`, { type: 'image/png' });
 
     const reader = new FileReader();
+    reader.onload = async (e) => {
+      document.getElementById('img-preview').src = e.target.result;
+      document.getElementById('preview-box').style.display = 'block';
+      await performScan();
+
+      if (num === 6) {
+        // Guide user to feedback reporting modal
+        setTimeout(() => {
+          openReportModal();
+          const noteField = document.getElementById('report-note');
+          if (noteField) noteField.value = "Demo Scenario 6: Malicious KYC link flagged for retraining queue.";
+        }, 500);
+      }
+    };
+    reader.readAsDataURL(selectedFile);
+  } catch (err) {
+    alert("Error loading demo scenario: " + err.message);
+  }
+}
+
+// Quick Custom URL / UPI Generator & Tester
+async function generateAndScanCustomQR() {
+  const input = document.getElementById('custom-qr-input');
+  const text = (input ? input.value : "").trim();
+  if (!text) {
+    alert("Please enter a URL, UPI string, or text to generate and scan.");
+    return;
+  }
+  switchTab('scanner');
+  document.getElementById('scan-status').textContent = 'Generating QR...';
+  try {
+    const res = await fetch(`/api/demo/render-qr?text=${encodeURIComponent(text)}`);
+    if (!res.ok) throw new Error("Failed to generate QR");
+    const blob = await res.blob();
+    selectedFile = new File([blob], "custom_test_qr.png", { type: 'image/png' });
+
+    const reader = new FileReader();
     reader.onload = (e) => {
       document.getElementById('img-preview').src = e.target.result;
       document.getElementById('preview-box').style.display = 'block';
@@ -456,6 +493,51 @@ async function loadDemoScenario(num) {
     };
     reader.readAsDataURL(selectedFile);
   } catch (err) {
-    alert("Error loading demo scenario: " + err.message);
+    alert("Error generating custom QR: " + err.message);
   }
 }
+
+// Drag & Drop and Clipboard Paste (Ctrl+V) Support
+document.addEventListener('DOMContentLoaded', () => {
+  const dropZone = document.getElementById('drop-zone');
+  if (dropZone) {
+    ['dragenter', 'dragover'].forEach(eventName => {
+      dropZone.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dropZone.classList.add('drag-over');
+      }, false);
+    });
+
+    ['dragleave', 'drop'].forEach(eventName => {
+      dropZone.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dropZone.classList.remove('drag-over');
+      }, false);
+    });
+
+    dropZone.addEventListener('drop', (e) => {
+      const dt = e.dataTransfer;
+      const files = dt ? dt.files : null;
+      if (files && files.length > 0) {
+        handleFileSelect({ target: { files: [files[0]] } });
+      }
+    }, false);
+  }
+
+  // Paste image directly from clipboard (Ctrl+V)
+  window.addEventListener('paste', (e) => {
+    const items = (e.clipboardData || (e.originalEvent && e.originalEvent.clipboardData))?.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.type.indexOf('image') === 0) {
+        const file = item.getAsFile();
+        if (file) {
+          handleFileSelect({ target: { files: [file] } });
+          break;
+        }
+      }
+    }
+  });
+});

@@ -156,6 +156,37 @@ def decode_qr(img: np.ndarray) -> Tuple[Optional[str], Optional[np.ndarray], boo
     if payload:
         return payload, corners, multi_code_flag, details
 
+    # Pass 7: OpenCV Aruco QR Detector (more robust corner pattern recognition)
+    if hasattr(cv2, "QRCodeDetectorAruco"):
+        try:
+            aruco_det = cv2.QRCodeDetectorAruco()
+            p_aruco, c_aruco, _ = aruco_det.detectAndDecode(img)
+            if p_aruco:
+                return p_aruco, c_aruco, multi_code_flag, details
+        except Exception:
+            pass
+
+    # Pass 8: pyzbar Fallback (industry-standard zbar barcode library)
+    try:
+        from pyzbar.pyzbar import decode as pyzbar_decode
+        barcodes = pyzbar_decode(img)
+        if not barcodes:
+            barcodes = pyzbar_decode(gray)
+        if barcodes:
+            for b in barcodes:
+                if b.type == "QRCODE":
+                    p_str = b.data.decode("utf-8", errors="ignore")
+                    if p_str:
+                        pts = b.polygon
+                        if len(pts) == 4:
+                            corners = np.array([[[pt.x, pt.y] for pt in pts]], dtype=np.float32)
+                        else:
+                            rect = b.rect
+                            corners = np.array([[[rect.left, rect.top], [rect.left + rect.width, rect.top], [rect.left + rect.width, rect.top + rect.height], [rect.left, rect.top + rect.height]]], dtype=np.float32)
+                        return p_str, corners, multi_code_flag, details
+    except Exception:
+        pass
+
     return None, None, False, "No valid QR code detected in image."
 
 def capture_and_decode(image_bytes: bytes) -> Dict[str, Any]:

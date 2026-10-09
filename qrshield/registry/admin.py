@@ -189,6 +189,24 @@ def sync_all_certificates_to_verifier():
     db = SessionLocal()
     try:
         records = db.query(IssuerRecord).all()
+        if not records:
+            from scripts.seed_registry import CITYPARK_PRIV_B64, SPIT_PRIV_B64
+            citypark_priv = load_private_key_b64(CITYPARK_PRIV_B64)
+            register_issuer(
+                issuer_id="citypark-01",
+                name="Mumbai Smart City Parking",
+                domain="pay.citypark.example",
+                issuer_pubkey_b64=export_public_key_b64(citypark_priv.public_key())
+            )
+            spit_priv = load_private_key_b64(SPIT_PRIV_B64)
+            register_issuer(
+                issuer_id="spit-admit",
+                name="SPIT Admissions Authority",
+                domain="spit.ac.in",
+                issuer_pubkey_b64=export_public_key_b64(spit_priv.public_key())
+            )
+            records = db.query(IssuerRecord).all()
+
         for r in records:
             try:
                 cert = json.loads(r.certificate_json)

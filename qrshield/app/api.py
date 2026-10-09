@@ -270,6 +270,19 @@ def api_generate_signed_qr(req: GenerateQRRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+@app.get("/api/demo/render-qr")
+def api_demo_render_qr(text: str):
+    """Utility to generate a QR PNG image for arbitrary text/URL for instant testing."""
+    if not text or not text.strip():
+        raise HTTPException(status_code=400, detail="Text cannot be empty")
+    qr = qrcode.QRCode(box_size=8, border=4)
+    qr.add_data(text.strip())
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return Response(content=buf.getvalue(), media_type="image/png")
+
 @app.get("/api/demo/scenario-image/{num}")
 def api_demo_scenario_image(num: int):
     """Generates synthetic and realistic images for the 6 demo scenarios in Section 13."""

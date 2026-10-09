@@ -48,10 +48,10 @@
             <span id="scan-status" style="font-size: 0.8rem; color: var(--text-muted);">Ready</span>
           </div>
 
-          <div class="capture-box" onclick="document.getElementById('file-input').click()">
+          <div class="capture-box" id="drop-zone" onclick="document.getElementById('file-input').click()">
             <div style="font-size: 2.2rem; margin-bottom: 8px;">📷</div>
-            <p style="font-weight: 600;">Upload photo or capture from camera</p>
-            <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;">Supports JPG, PNG, WEBP</p>
+            <p style="font-weight: 600;">Upload photo, drag & drop, or paste (Ctrl+V)</p>
+            <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;">Click to browse JPG, PNG, WEBP or capture from camera</p>
             <input type="file" id="file-input" accept="image/*" capture="environment" onchange="handleFileSelect(event)">
           </div>
 
@@ -75,6 +75,17 @@
           </div>
 
           <div id="quality-hints" style="margin-top: 14px; font-size: 0.8rem; color: #fbbf24; display: none;"></div>
+
+          <!-- Custom URL / UPI Generator & Tester -->
+          <div style="margin-top: 16px; border-top: 1px solid var(--border-color); padding-top: 12px;">
+            <div style="font-size: 0.85rem; font-weight: 600; color: var(--accent-cyan); margin-bottom: 6px;">
+              ✨ Test Any Custom URL / UPI Directly
+            </div>
+            <div style="display: flex; gap: 8px;">
+              <input type="text" id="custom-qr-input" class="form-control" style="font-size: 0.82rem; padding: 6px 10px;" placeholder="e.g. https://phishing-site.xyz or upi://pay?..." onkeydown="if(event.key==='Enter') generateAndScanCustomQR()">
+              <button class="btn btn-secondary" style="font-size: 0.78rem; white-space: nowrap; padding: 6px 12px;" onclick="generateAndScanCustomQR()">Generate & Scan</button>
+            </div>
+          </div>
         </div>
 
         <!-- Right: Layered Verdict Card -->
