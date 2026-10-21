@@ -84,8 +84,7 @@ KNOWN_GOOD: Set[str] = {
     "spotify.com", "github.com", "gitlab.com", "stackoverflow.com", "python.org", "mozilla.org", "reddit.com",
     "yahoo.com", "bing.com", "duckduckgo.com", "zoom.us", "dropbox.com", "adobe.com", "paypal.com", "ebay.com",
     "cloudflare.com", "medium.com", "quora.com", "imdb.com", "bbc.com", "bbc.co.uk", "cnn.com", "nytimes.com",
-    "telegram.org", "signal.org", "slack.com", "notion.so", "canva.com", "figma.com", "openai.com",
-    "anthropic.com", "kaggle.com", "arxiv.org", "springer.com", "ieee.org", "acm.org", "nptel.ac.in",
+    "telegram.org", "signal.org", "slack.com", "notion.so", "canva.com", "figma.com", "kaggle.com", "arxiv.org", "springer.com", "ieee.org", "acm.org", "nptel.ac.in",
     # India: payments, banks, commerce, travel, telecom, media, government
     "paytm.com", "phonepe.com", "razorpay.com", "bhimupi.org.in", "npci.org.in", "sbi.co.in", "onlinesbi.sbi",
     "onlinesbi.com", "hdfcbank.com", "icicibank.com", "axisbank.com", "kotak.com", "pnbindia.in", "yesbank.in",
