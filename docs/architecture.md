@@ -1,165 +1,101 @@
-# QRshield System Architecture (F40)
+# QRshield architecture
 
-QRshield is a defense-in-depth, three-layer detector against malicious and physically tampered QR codes (quishing). Rather than relying on simple reactive blocklists, QRshield fuses **cryptographic digital signatures**, **computer vision physical sticker analysis**, and **machine-learned lexical/network telemetry** into an authoritative verdict before any link opens.
-
----
-
-## 1. High-Level Architecture Diagram
+QRshield turns "scan and open" into **scan, verify, then decide**. Three independent layers inspect every code; a rule-first engine fuses them into one verdict that the UI shows *before* anything opens.
 
 ```mermaid
 flowchart TD
-    User([User Scans QR Code]) --> M0[M0: Capture & Decode]
-    
-    subgraph Parallel Inspection Pipeline
-        M0 -->|Payload String| M1[M1: URL / Payload ML]
-        M0 -->|Raw Image & Corners| M2[M2: Visual Tamper CV]
-        M0 -->|Payload / Token| M3[M3: Crypto / Mini-PKI Verify]
-    end
-    
-    M1 -->|url_risk, signals| M4[M4: Aggregation Engine]
-    M2 -->|tamper_risk, status, heatmap| M4
-    M3 -->|sig_status, issuer| M4
-    
-    M4 -->|Rule-first + Noisy-OR| Verdict{Verdict Decision}
-    Verdict -->|Certified Safe| UI_G[M5: Verdict UI - SAFE Green]
-    Verdict -->|Suspicious| UI_Y[M5: Verdict UI - SUSPICIOUS Yellow]
-    Verdict -->|High Threat| UI_R[M5: Verdict UI - BLOCK Red]
-    
-    UI_Y -->|Explicit Confirmation| UserAction[Safe Link Inspection]
-    UI_R -->|Double Risk Unlock| UserAction
-    UI_G --> UserAction
-    
-    UserAction -->|Submit False/True Quishing| ReportDB[(SQLite Feedback Queue)]
-    ReportDB --> AdminGate[Admin Review Gate]
-    AdminGate --> Retrain[Continuous Retraining]
+    A([photo / camera / typed link]) --> M0[M0 capture + decode<br/>zxing-cpp, OpenCV fallbacks<br/>quality gate, stacked-code check]
+    M0 -->|payload| M1[M1 link analysis<br/>features + char n-grams + brand rules<br/>UPI checks, SSRF-safe shortener look]
+    M0 -->|image + corners| M2[M2 sticker check<br/>rectify, 48 physical features<br/>calibrated LightGBM]
+    M0 -->|payload| M3[M3 signature check<br/>Ed25519 token, pinned root,<br/>cert chain, domain binding, CRL]
+    M1 -->|url risk| M4
+    M2 -->|tamper probability| M4
+    M3 -->|status| M4{M4 engine<br/>rules first, noisy-OR second}
+    M4 --> M5[M5 UI<br/>verdict, 3 layer cards, reasons<br/>never auto-opens]
+    M5 --> R[report] --> Q[admin review] --> G[retrain + benchmark gate]
 ```
 
----
+## Module contracts
 
-## 2. Module Specifications and Interface Contracts
+All modules exchange plain dicts and are importable without the web app.
 
-Each component exposes a frozen interface signature returning plain Python dictionaries:
+| Function | Returns |
+|---|---|
+| `capture.capture_and_decode(bytes)` | `{success, payload, payload_type, corners, quality, multi_code, codes, image, error}` |
+| `url_layer.analyze(payload)` | `{score 0..1, payload_type, signals[{name,value,text,direction}], details}` - `score` is the *decision-scale* risk |
+| `cv_layer.analyze(img, img2=None, corners=None)` | `{score, status ok\|inconclusive\|low_quality\|not_applicable, signals, heatmap_png_b64, details}` - `score` is a calibrated tamper probability |
+| `crypto_layer.verify(payload, store=None)` | `{status none\|valid\|invalid\|unknown_issuer\|revoked\|expired\|domain_mismatch, issuer, detail}` |
+| `engine.decide(url, cv, sig)` | `{verdict SAFE\|SUSPICIOUS\|BLOCK, risk, certified, reasons<=3, breakdown}` |
 
-```python
-# M1: URL / Payload Classifier
-url_layer.analyze(payload: str) -> {
-    "score": float,            # 0.0 to 1.0 (malicious probability)
-    "payload_type": str,       # "url" | "upi" | "other"
-    "signals": [
-        {"name": str, "value": Any, "text": str}
-    ]
-}
+## M3 - the cryptographic core
 
-# M2: Computer Vision Physical Tamper Layer
-cv_layer.analyze(img: bytes, img2: bytes | None = None) -> {
-    "score": float,            # 0.0 to 1.0 (tamper probability)
-    "status": str,             # "ok" | "inconclusive" | "low_quality"
-    "signals": [...],
-    "heatmap_png_b64": str | None  # Data URI base64 PNG Grad-CAM overlay
-}
-
-# M3: Cryptographic PKI Verification Layer
-crypto_layer.verify(payload: str) -> {
-    "status": str,             # "none" | "valid" | "invalid" | "unknown_issuer" | "revoked" | "expired" | "domain_mismatch"
-    "issuer": {
-        "name": str,
-        "domain": str,
-        "key_id": str,
-        "issuer_id": str
-    } | None
-}
-
-# M4: Aggregation and Scoring Engine
-engine.decide(url_res: dict, cv_res: dict, sig_res: dict) -> {
-    "verdict": str,            # "SAFE" | "SUSPICIOUS" | "BLOCK"
-    "risk": float,             # 0.0 to 1.0
-    "certified": bool,
-    "reasons": [str, ...]      # Up to 3 plain-language explanations
-}
+```
+Registry root key (Ed25519; private key offline/0600, PUBLIC key pinned in the verifier)
+   | signs
+   v
+Issuer certificate  { issuer_id, name, domain, kid, issuer_pubkey, valid_from, valid_to }   context "QRSHIELD-CERT-v1"
+   | issuer private key signs
+   v
+QR token  0x01 | iat u32 | exp u32 | len+issuer | len+key id | len+location | Ed25519 signature (64 B)
+          carried as one base64url URL parameter:  https://pay.citypark.example/m/42?qrs=...
+Signed message:  "QRSHIELD-v1" 00 canonical_url 00 issuer 00 kid 00 location 00 iat 00 exp
 ```
 
----
+* **Graceful degradation.** The token rides in a query parameter, so any phone camera still opens the business URL. A signed code is ~190 bytes (error-correction level M), well inside the plan's 250-byte budget; a JSON token would have been ~320.
+* **Domain separation.** Fixed context strings (`QRSHIELD-v1`, `QRSHIELD-CERT-v1`, `QRSHIELD-CRL-v1`) mean a signature can never be replayed as another message type.
+* **Canonicalisation.** Lower-case scheme/host, default port and fragment dropped, `qrs` stripped, query sorted, userinfo (`user@host`) rejected. Signer and verifier share one function.
+* **Verification order** (every failure is *closed*; no pinned root means nothing verifies):
+  1. no `qrs` -> `none` (unsigned, not an error); malformed -> `invalid`
+  2. certificate unknown, not signed by the pinned root, or outside its validity -> `unknown_issuer`
+  3. issuer or `issuer:kid` on the CRL -> `revoked`
+  4. Ed25519 signature over the canonical URL -> `invalid` on failure
+  5. URL host outside the certified domain -> `domain_mismatch`
+  6. past `exp` -> `expired`; otherwise `valid`
 
-## 3. Cryptographic Mini-PKI Design
+  The signature is checked **before** expiry/domain are trusted: a forged token can never downgrade itself to the milder "expired" verdict.
+* **Revocation.** Root-signed, versioned CRL. Verifiers refuse older versions (rollback protection) and lists signed by another key. Entries are `issuer` or `issuer:kid`, so a key can be rotated without revoking the business.
+* **Hashing.** SHA-256 for payload fingerprints in reports/telemetry. Ed25519 uses SHA-512 internally.
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Authority as Pinned Root Authority
-    actor Business as Registered Business (Issuer)
-    actor Attacker as Threat Actor / Quisher
-    actor Verifier as QRshield Scanner Engine
+## M1 - link analysis
 
-    Authority->>Business: Issues Signed Certificate (Ed25519)
-    Note over Business: cert = {issuer_id, domain, pubkey, valid_to}
-    Business->>Business: Signs Canonical URL + Context ('QRSHIELD-v1')
-    Business->>Verifier: URL with Token (?qrs=<base64url>)
-    Verifier->>Verifier: 1. Parse Token & Lookup Cert in Local Cache
-    Verifier->>Verifier: 2. Verify Cert against Pinned Root Key
-    Verifier->>Verifier: 3. Check Signed CRL for Revocation
-    Verifier->>Verifier: 4. Check Expiration & Enforce Domain Binding
-    Verifier->>Verifier: 5. Verify Ed25519 Signature over Canonical URL
-    Verifier-->>User: Result: SAFE with Certified Badge
-```
+* Features are computed from the URL *string only* (no live lookups feed the model), so training and serving see identical inputs. The scheme and `www.` are not features.
+* Two models are blended and isotonic-calibrated: LightGBM on 49 structured features (host shape, brand impersonation, path/query), and a hashed character 3-5-gram logistic model. Explanations come from tree-SHAP contributions mapped to sentences.
+* Brand logic uses *official registered domains* per brand: `paytm.xyz` is impersonation even though its label is exactly "paytm". Short brand names match on whole tokens only (`accredited.org` is fine), homoglyphs and punycode are normalised.
+* Rules sit on top where being wrong is asymmetric: brand impersonation floors the risk, official / well-known / institution-only (`.gov.in`, `.ac.in`) domains cap it. Platforms that let anyone publish (`pages.dev`, `github.io`, shorteners...) never earn a trust discount.
+* **SSRF-safe inspection** of shorteners (`fetch_safe.py`): DNS is resolved once by us, every address must be globally routable, the socket connects to *that* IP (no second resolution - rebinding-proof), every redirect hop is re-validated, HEAD only, 3 s timeout, 5 hops.
 
-### Token Format and Canonical Encoding
-Signed QR codes embed the token as a single URL parameter `qrs`:
-```
-https://pay.citypark.example/m/42?qrs=<base64url(token)>
-```
-Normal scanners without QRshield open the destination URL directly without crashing (**Graceful Degradation**).
+## M2 - sticker check
 
-#### Token JSON Structure:
-```json
-{
-  "v": 1,
-  "iss": "citypark-01",
-  "kid": "key-1",
-  "loc": "andheri-counter-04",
-  "iat": 1775630000,
-  "exp": 1775716400,
-  "sig": "MEQCIA..."
-}
-```
+The photo is warped (homography from the decoded corners) onto a 384x384 canvas with the code centred and one QR-width of surface around it, so every feature is in canonical units. 48 features compare the code region with its surroundings: per-side straight boundaries, shadow bands, paper colour/white-point, print grain and LBP texture, highlights, ink-dark module-sized blobs *outside* the code (a hidden original), quiet-zone cleanliness and enclosing frames. A small calibrated LightGBM turns them into a tamper probability. The UI overlay draws the *measured evidence* (boundaries, shadow bands, blobs), not a decorative heat-map. Training data is simulated (`simulate.py`) with an option to mix in real photos - see `docs/evaluation.md` for exactly what that does and does not prove.
 
-#### Canonical Byte Representation:
-```
-msg = "QRSHIELD-v1\x00" + canonical_url + "\x00" + iss + "\x00" + kid + "\x00" + loc + "\x00" + iat + "\x00" + exp
-```
-* **Domain Separation**: Prefixed with `"QRSHIELD-v1"` to prevent cross-protocol signature reuse.
-* **Domain Binding**: The certificate specifies `domain: "pay.citypark.example"`. If an attacker copies the token or a valid issuer attempts to sign an external domain (e.g. `scam.com`), the verifier rejects it with `domain_mismatch`.
+## M4 - engine
 
----
+1. Cryptographic facts decide first: `valid` -> SAFE + certified (downgraded to SUSPICIOUS if the sign physically looks pasted over); `invalid`/`unknown_issuer`/`revoked`/`domain_mismatch` -> BLOCK; `expired` -> at least SUSPICIOUS.
+2. Unsigned codes: `risk = 1 - (1 - a*url)(1 - b*tamper)` with a = 0.95, b = 0.60 (0.35 if the photo was borderline). The tamper probability is first rescaled (<= 0.40 = nothing). Because b < 0.65, **visual evidence alone can never BLOCK**. Two layers agreeing (> 0.5 each) floors the risk at 0.85. SAFE < 0.30 <= SUSPICIOUS < 0.65 <= BLOCK.
+3. Hard overrides: blocklist hit / dangerous scheme -> BLOCK; stacked codes, UPI payee mismatch, two photos decoding differently -> at least SUSPICIOUS.
 
-## 4. Multi-Physics Computer Vision Pipeline (M2)
+Every response carries a `breakdown` (inputs, weights, fused value, rules applied, timings) which the UI shows under "Show the working".
 
-1. **Homography Rectification (F14)**: Uses detected corner points to warp the QR code and its surrounding perimeter (1.5x width) into a normalized 300x300 canvas.
-2. **Three Analytical ROIs**:
-   * *QR Core*: Inner modules containing payload matrix.
-   * *Quiet-Zone Ring*: Immediate white margin around the code.
-   * *Surface Ring*: Host substrate context (metal, wood, plastic).
-3. **Feature Extraction**:
-   * *Boundary Discontinuity (F15)*: Sobel gradient energy, Canny edge detection, straight Hough cutline parallel tracking.
-   * *Illumination & Micro-Shadows (F16)*: Surface luminance plane fitting in LAB color space; perpendicular edge luminance drops detecting 3D physical sticker elevation.
-   * *Specular Gloss Differential (F16)*: HSV saturation/brightness histograms identifying vinyl stickers on matte surfaces.
-   * *Halftone & Print Quality (F17)*: Laplacian variance ratio (DPI disparity) and 2D FFT radial spectrum peaks identifying moiré patterns.
-   * *Texture Mismatch (F17)*: Local Binary Patterns (LBP) chi-square divergence between quiet zone and host surface.
-4. **Grad-CAM Visual Heatmap (F20, F37)**: Produces an overlay highlighting detected sticker edges in bright red/orange.
-5. **Multi-Angle Second Photo (F21)**: If tamper risk is borderline (0.38–0.62), prompts user for an oblique ~30° shot. Aligns both frames via ORB features and evaluates parallax/photometric disparity.
+## Web app and API
 
----
+`qrshield/app/api.py` exposes `create_app()` (isolated registry/trust-store per instance; used by the tests) and a lazy module-level `app` for `uvicorn`.
 
-## 5. Decision Fusion & Safety Rules (M4 & M5)
+| Route | Auth | Purpose |
+|---|---|---|
+| `POST /api/scan` (image, image2?) | public, 40/min | full pipeline |
+| `POST /api/check` | public | link/payload only (no photo) |
+| `POST /api/report` | public, 12/min | feedback into the review queue |
+| `GET /api/registry/{root,crl,issuers,issuers/{id}/cert}`, `POST /api/registry/verify` | public | transparency |
+| `GET /api/demo/scenarios`, `/api/demo/scenario-image/{1-6}` | public | the six demo scenarios |
+| `GET /api/health`, `/api/results` | public | status, measured metrics |
+| `/api/admin/*` (sign, issuers, revoke/restore/rotate, reports, retrain, models, audit) | `X-Admin-Token` | privileged operations |
 
-1. **Rule-First, Score-Second**:
-   * Cryptographic verification results take absolute precedence.
-   * A valid certificate awards `SAFE` with a `Certified` badge (unless physical sticker tampering is detected, which downgrades to `SUSPICIOUS`).
-   * A fake, revoked, or domain-mismatched token forces `BLOCK`.
-2. **Unsigned Noisy-OR Fusion**:
-   For unsigned QR codes, risk is computed via independence fusion:
-   $$\text{risk} = 1 - (1 - a \cdot \text{url\_risk}) \cdot (1 - b \cdot \text{tamper\_risk})$$
-   * Agreement boost: If both URL and CV layers exceed 0.50 risk, minimum risk is locked to $\ge 0.85$.
-3. **Safe Link Interaction (F33)**:
-   * Links are **never automatically opened**.
-   * On `SUSPICIOUS`, the user must check a risk acknowledgment box.
-   * On `BLOCK`, the button is locked behind an explicit override warning.
+Hardening: strict CSP (no inline script or style, `connect-src 'self'`), `nosniff`, frame denial, upload size and pixel limits enforced before decoding, sliding-window rate limits, constant-time token comparison, append-only audit log, no CORS (same-origin app).
+
+## Runtime state (never committed)
+
+`.qrshield/` (override with `QRSHIELD_HOME`): `registry.db`, `keys/root.json` + `keys/issuers/*.json` (0600), `admin_token`, retrained models, certificates for `--https`, caches. Models that ship with the repo live in `qrshield/models/`; a promoted retrain takes precedence without a restart.
+
+## Human-gated learning
+
+`report -> admin approves -> candidate trained on base corpus + approved rows -> must not be worse than the active model on a fixed benchmark AND get all canary links right -> promoted`. The gate, not just the human, is what stops mass-reporting from poisoning the live model; see `tests/test_retrain.py`.

@@ -1,206 +1,118 @@
-# QRshield 🛡️
-> **A Three-Layer Detector for Malicious & Tampered QR Codes (Quishing)**  
-> *URL / Payload ML + Physical Sticker-Overlay Detection (CV) + Signed QR Codes (Ed25519 Mini-PKI)*
+# QRshield
+
+**Scan, verify, then decide.** A three-layer detector for malicious and tampered QR codes ("quishing"): link analysis + a pasted-sticker check + Ed25519 signed codes with a mini-PKI.
 
 [![QRshield CI](https://github.com/akshitsharma24-ux/CNS-ISE-PROJECT/actions/workflows/ci.yml/badge.svg)](https://github.com/akshitsharma24-ux/CNS-ISE-PROJECT/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Python: 3.11 | 3.12](https://img.shields.io/badge/Python-3.11%20%7C%203.12-green.svg)](requirements.txt)
-[![Tests: 43 Passed](https://img.shields.io/badge/Tests-43%20Passed-success.svg)](tests/)
+![Python 3.11 | 3.12](https://img.shields.io/badge/Python-3.11%20%7C%203.12-green.svg)
 
-**Course:** Cryptography and Network Security (CE305 / CS305), Sardar Patel Institute of Technology (SPIT), Mumbai  
-**Assessment:** ISE-2 (Design: 2 | Implementation: 4 | Evaluation/GitHub: 2 | Live Demo: 2)  
-**Topic #5:** Malicious QR Code / Deepfake Document Detector for Quishing Attacks  
-**Team:** Black Sparrow (10 Members)  
-**Team Leader:** Akshit Sharma  
+**Course:** Cryptography and Network Security (CE305/CS305), SPIT Mumbai - ISE-2 / ACNS-DC 2026-27 &nbsp;|&nbsp; **Team Black Sparrow** (leader: Akshit Sharma)
 
----
+## The problem
 
-## 1. Problem Statement & Motivation
+A QR code is a link you cannot read. Attackers exploit that in two ways: **new look-alike links** that no blocklist has seen, and **stickers pasted over real codes** (parking meters, menus, payment stands). A URL checker cannot see a sticker, a camera check cannot read a link, and signed codes only help businesses that sign. QRshield layers all three so each covers the others' gap, and shows the result **before anything opens**.
 
-QR codes transform physical interactions into digital transactions with a blind "scan and open" reflex. Attackers exploit this via **Quishing (QR Phishing)**:
-1. **Zero-Day Phishing Links**: Attackers register lookalike domains minutes before launching attacks; traditional static blocklists (Google Safe Browsing, PhishTank) are purely reactive and miss brand-new attacks.
-2. **Physical Sticker Swaps**: Fraudsters print adhesive QR stickers and paste them over legitimate placards (municipal parking meters, restaurant table stands, retail UPI soundboxes). **No URL analysis tool can see the physical sticker.**
-3. **Unauthenticated Payloads**: Anyone can print a QR code claiming to represent an official bank or civic entity with no provenance.
-
-### The QRshield Solution
-QRshield turns "scan and open" into **"scan, verify, then decide"** by evaluating every QR code with **three independent, orthogonal layers** before any browser or payment interface opens:
-
-```
-User Scans QR 
-  ├── M0: Capture & Decode (Multi-code / Stacked check + Blur/Glare Gate)
-  ├── M1: URL / Payload ML Classifier (Lexical + Typosquatting + SSRF-Safe Fetch)
-  ├── M2: Visual Tamper Detection (Physical Sticker Discontinuity + Grad-CAM)
-  ├── M3: Cryptographic Verification (Ed25519 Mini-PKI + Signed CRL + Domain Binding)
-  └── M4: Aggregation Engine (Rule-First Noisy-OR Fusion -> SAFE / SUSPICIOUS / BLOCK)
-        └── M5: Verdict UI (Color banner + 3 Layer Cards + Safe Link Lock + Feedback Queue)
-```
-
----
-
-## 2. System Architecture
-
-```mermaid
-flowchart TD
-    Scan([User Scans QR / Uploads Image]) --> M0[M0: Capture & Decode]
-    
-    subgraph Parallel Inspection Pipeline
-        M0 -->|Payload String| M1[M1: URL / Payload ML]
-        M0 -->|Raw Image & Corners| M2[M2: Visual Tamper CV]
-        M0 -->|Token Parameter| M3[M3: Crypto / Mini-PKI]
-    end
-    
-    M1 -->|url_risk: 0.0-1.0| M4[M4: Aggregation Engine]
-    M2 -->|tamper_risk: 0.0-1.0| M4
-    M3 -->|sig_status: valid/revoked/none| M4
-    
-    M4 -->|Hard Rules + Noisy-OR| Verdict{Security Verdict}
-    Verdict -->|Certified Provable| UI_SAFE[SAFE - Green Banner]
-    Verdict -->|Borderline / Anomaly| UI_WARN[SUSPICIOUS - Yellow Banner]
-    Verdict -->|Threat Detected| UI_BLOCK[BLOCK - Red Banner]
-    
-    UI_SAFE --> Display[Destination Displayed - Never Auto-Opened]
-    UI_WARN --> Display
-    UI_BLOCK --> Display
-    
-    Display --> Report[User Feedback Report]
-    Report --> Admin[Admin Human Gate]
-    Admin --> Retrain[Continuous Retraining Pipeline]
-```
-
----
-
-## 3. Cryptography & Network Security (Core Syllabus Mapping)
-
-| CNS Concept | Concrete Implementation in QRshield | Code Location |
+| Layer | Question it answers | How |
 |---|---|---|
-| **Asymmetric Digital Signatures** | High-performance 64-byte Ed25519 signatures with deterministic nonces | [`qrshield/crypto_layer/keys.py`](qrshield/crypto_layer/keys.py) |
-| **Public Key Infrastructure (PKI)** | Pinned Root Authority certificate signing X.509-style JSON issuer credentials | [`qrshield/crypto_layer/pki.py`](qrshield/crypto_layer/pki.py) |
-| **Domain Separation** | Fixed protocol context string (`"QRSHIELD-v1"`) preventing cross-protocol reuse | [`qrshield/crypto_layer/token.py`](qrshield/crypto_layer/token.py) |
-| **Strict Domain Binding** | Verifier rejects valid signatures if target host differs from certified domain | [`qrshield/crypto_layer/pki.py`](qrshield/crypto_layer/pki.py) |
-| **Certificate Revocation (CRL)** | Root-signed versioned Certificate Revocation List cached locally for offline enforcement | [`qrshield/crypto_layer/revocation.py`](qrshield/crypto_layer/revocation.py) |
-| **Cryptographic Hashing** | SHA-256 for privacy-preserving report IDs, token hashing, and registry state | [`qrshield/crypto_layer/verify.py`](qrshield/crypto_layer/verify.py) |
-| **Server-Side Request Forgery (SSRF) Guard** | Custom DNS resolution rejecting RFC1918 private, loopback, link-local, and cloud metadata IPs | [`qrshield/url_layer/fetch_safe.py`](qrshield/url_layer/fetch_safe.py) |
-| **Replay & Expiry Binding** | Location ID (`loc`) registry binding and temporal expiration (`exp`) timestamps | [`qrshield/crypto_layer/token.py`](qrshield/crypto_layer/token.py) |
+| **M1 link analysis** | is this link a look-alike / scam? | calibrated LightGBM + character n-gram model, brand-impersonation rules over *official registered domains*, UPI payee checks, SSRF-safe look at shorteners |
+| **M2 sticker check** | does this physical code look pasted over something? | rectify the photo onto the QR plane, 48 physical features (boundaries, shadow, paper colour, grain, gloss, hidden-original fragments), calibrated model, evidence overlay |
+| **M3 signature check** | did a registered business really issue this exact code? | Ed25519 token in the URL, root-signed issuer certificate, domain binding, signed + versioned revocation list, key rotation |
+| **M4 engine** | what should the user do? | crypto facts first, then noisy-OR fusion; visual evidence alone can never BLOCK; every verdict shows its working |
 
----
+![Scenario 4: a sticker pasted over a signed parking code](docs/images/scenario4.png)
 
-## 4. Repository Structure
+## Quick start
+
+**Windows (no `make` needed):** double-click **`run_demo.bat`**. It creates a virtual environment, installs dependencies, seeds the registry and opens <http://127.0.0.1:8000>.
+
+**Any OS:**
+```bash
+python -m venv .venv && . .venv/bin/activate      # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+python -m qrshield setup        # keys + demo registry + self-check; prints the admin token
+python -m qrshield serve        # http://127.0.0.1:8000
+```
+Python 3.11 or 3.12. `python -m qrshield doctor` diagnoses a broken install.
+
+**Phone camera:** browsers allow the live camera only over HTTPS (or localhost). Either use *Photo > Take photo* (opens the phone's camera app, works over plain http) or run `python -m qrshield serve --https --host 0.0.0.0` and open the printed `https://<laptop-ip>:8000` on the phone (accept the self-signed certificate once).
+
+**Admin features** (Issuer portal, Admin console) need the admin token printed at start-up (also in `.qrshield/admin_token`; set `QRSHIELD_ADMIN_TOKEN` to choose your own).
+
+**Live demo props:** `python -m qrshield demo-assets` writes an A4 sheet with the six demo codes; `docs/demo_script.md` has the full script and viva Q&A. The six scenarios are also available as one-click simulated photos in the UI.
+
+## Cryptography and network security map
+
+| CNS concept | What QRshield does | Code |
+|---|---|---|
+| Digital signatures | Ed25519 over a domain-separated, canonicalised message; 64-byte signature in a ~140-character token | [`crypto_layer/token.py`](qrshield/crypto_layer/token.py), [`keys.py`](qrshield/crypto_layer/keys.py) |
+| PKI / certificates | pinned root key, root-signed issuer certificates bound to a domain and key id | [`pki.py`](qrshield/crypto_layer/pki.py), [`registry/`](qrshield/registry/service.py) |
+| Domain binding | a genuine issuer cannot certify a look-alike host; bare suffixes cannot be certified | [`pki.py`](qrshield/crypto_layer/pki.py) |
+| Revocation | root-signed versioned CRL, per-key revocation, key rotation, rollback protection | [`revocation.py`](qrshield/crypto_layer/revocation.py), [`verify.py`](qrshield/crypto_layer/verify.py) |
+| Fail-closed verification | no trust anchor -> nothing verifies; signature checked *before* expiry/domain | [`verify.py`](qrshield/crypto_layer/verify.py) |
+| Hashing | SHA-256 payload fingerprints for reports and telemetry | [`registry/service.py`](qrshield/registry/service.py) |
+| SSRF defence | resolve once, globally-routable IPs only, connect to the validated IP (DNS-rebinding-proof), re-validate every redirect | [`url_layer/fetch_safe.py`](qrshield/url_layer/fetch_safe.py) |
+| Secure parsing of hostile input | size/pixel limits before decoding, parsers that never raise, canonical URLs, userinfo rejected | [`capture/decode.py`](qrshield/capture/decode.py), [`netutil.py`](qrshield/netutil.py) |
+| Web hardening | strict CSP, no inline script, admin token (constant-time), rate limits, append-only audit log | [`app/security.py`](qrshield/app/security.py) |
+| Poisoning defence | human review + fixed-benchmark + canary gate before a model is promoted | [`retrain.py`](qrshield/retrain.py) |
+
+Details and the attack-by-attack table with the test that proves each defence: [`docs/threat_model.md`](docs/threat_model.md), [`docs/architecture.md`](docs/architecture.md).
+
+## Measured results
+
+<!-- RESULTS:START -->
+| Component | Result |
+|---|---|
+| M1 link model (real public corpora) | ROC-AUC **0.9434** on an external corpus it never trained on (domain-disjoint split: 0.9425); flags 90.5% of 20,277 phishing links from 2026 feeds at the 0.5 threshold |
+| M2 sticker check (**simulated** photos) | ROC-AUC **0.8805** on surfaces it never saw; catches 99.1% of offset/rotated and 97.8% of smaller stickers, but only 47.5% of exact-fit ones (physically close to a genuine sticker) |
+| End-to-end ablation (simulated photos, real pipeline) | all three layers flag **77.8%** of attacks vs 30.0% for the best single layer (cv_only); false alarms on genuine codes: 8.1%; median scan 97.4 ms |
+| M3 signatures | forged, edited, expired, revoked, rolled-back, cross-domain and rogue-root tokens are all rejected - see `tests/test_crypto.py`, `tests/test_redteam.py` |
+<!-- RESULTS:END -->
+
+Full methodology, per-style and per-surface tables, ablations and limitations: [`docs/evaluation.md`](docs/evaluation.md) (generated from `docs/results/*.json`; nothing is typed by hand).
+
+## Honest limitations
+
+* The sticker model is trained on **simulated** photographs. Add real photos (`scripts/collect_cv_dataset.md`) to measure real-world accuracy.
+* A **perfectly fitted** sticker over an *unsigned* code is close to indistinguishable from a genuine sticker; the sticker layer catches imperfect covers. Signing the original code is what closes this gap.
+* A signature proves who issued a payload, **not** that a physical code was never copied (replay). Location binding, expiry and the sticker check limit - not eliminate - this.
+* The link model is statistical (class-balanced training; scores are not real-world probabilities).
+
+## Repository layout
 
 ```
 qrshield/
-├── README.md                          # Project documentation and quick start
-├── LICENSE                            # MIT License
-├── requirements.txt                   # Pinned dependencies
-├── Makefile                           # Unified make targets (setup, test, demo, retrain)
-├── .github/workflows/ci.yml           # GitHub Actions multi-version CI
-├── docs/
-│   ├── architecture.md                # System design & component contracts
-│   ├── threat_model.md                # Attack trees, adversary model & CNS defenses
-│   ├── evaluation.md                  # Benchmark metrics, ablation & latency tables
-│   └── demo_script.md                 # 6 Live demo scenarios & viva Q&A
-├── qrshield/
-│   ├── capture/                       # M0: Capture, decode, multi-code, quality gate
-│   ├── url_layer/                     # M1: Lexical, typosquat, homoglyph, SSRF-safe ML
-│   ├── cv_layer/                      # M2: Rectification, edge/shadow/print, Grad-CAM
-│   ├── crypto_layer/                  # M3: Ed25519 signing, mini-PKI, CRL, token
-│   ├── registry/                      # PKI database, issuer authority, CRL endpoints
-│   ├── engine/                        # M4: Rule-first noisy-OR aggregation & reasons
-│   └── app/                           # M5: FastAPI web server & single-page app
-├── data/
-│   ├── cv_images/                     # Sample physical tamper dataset & metadata CSV
-│   └── README_data.md                 # Dataset citation and hygiene guidelines
-├── notebooks/                         # EDA, model training, CV features, ablation
-├── scripts/
-│   ├── make_signed_qr.py              # CLI tool for businesses to generate signed QRs
-│   ├── seed_registry.py               # Pre-seeds demo authorities and certificates
-│   ├── retrain.py                     # Continuous learning pipeline with quality gate
-│   └── collect_cv_dataset.md          # Team CV dataset collection protocol
-└── tests/                             # 43 unit and red-team security attack tests
+  capture/        M0  decode (zxing-cpp + OpenCV fallbacks), payload typing, quality gate, stacked-code check
+  url_layer/      M1  features, brands, UPI, SSRF-safe fetch, models, training, corpus builder
+  cv_layer/       M2  rectification, features, model, simulator, evidence overlay, second photo, training
+  crypto_layer/   M3  Ed25519 tokens, PKI, CRL, trust store + verification
+  registry/           issuer lifecycle, key custody, CRL publication, feedback queue, audit log
+  engine/         M4  rule-first fusion + plain-language reasons
+  app/            M5  FastAPI + single-page UI (static/: HTML, CSS, ES modules - no build step)
+  models/             trained models + retraining base corpus
+scripts/              dataset build, evaluation, report generator, demo assets, signed-QR CLI
+tests/                unit, security/red-team, pipeline and browser (Playwright) tests
+docs/                 architecture, threat model, evaluation (generated), demo script
 ```
 
----
+## Development
 
-## 5. Quick Start & Execution
-
-### Prerequisites
-- Python 3.11 or 3.12
-- Standard webcam or mobile phone browser
-
-### Installation
 ```bash
-# Clone the repository
-git clone https://github.com/akshitsharma24-ux/CNS-ISE-PROJECT.git
-cd CNS-ISE-PROJECT
-
-# Install dependencies and seed the cryptographic registry
-make setup
-# OR on Windows without make:
-pip install -r requirements.txt
-python -m scripts.seed_registry
+pip install -r requirements-dev.txt
+python -m pytest                       # everything except browser tests
+python -m pytest -m e2e                # browser tests (pip install playwright; playwright install chromium)
+python -m qrshield data                # download public corpora, build the URL training pool   (requirements-train.txt)
+python -m qrshield train-url           # retrain the link model
+python -m qrshield train-cv [--real data/cv_images]
+python -m qrshield evaluate            # end-to-end ablation
+python -m scripts.make_eval_report     # regenerate docs/evaluation.md and the table above
 ```
 
-### Running Tests
-Execute the comprehensive 43-test unit and red-team test suite:
-```bash
-make test
-# OR:
-python -m pytest tests/ -v
-```
+Runtime state (registry database, **private keys**, admin token, retrained models, certificates) lives in `.qrshield/`, which is git-ignored. No key is ever committed.
 
-### Starting the Live Demo Server
-```bash
-make demo
-# OR:
-python -m uvicorn qrshield.app.api:app --host 0.0.0.0 --port 8000 --reload
-```
-Open **`http://localhost:8000`** in any desktop or mobile browser.
+## Team Black Sparrow
 
----
+Akshit Sharma (lead), Miti Shah, Jalak Shah, Maisha Vageria, Param Rajgor, Rahil Shah, Shrey Vadhani, Tanvi Sheth, Twissha Shah, Dhyani Sanghvi.
 
-## 6. Live Demo Scenarios (Section 13)
+## Licence
 
-The web application includes **1-click quick-test buttons** for each scripted scenario:
-
-1. **Clean Unsigned Code (SPIT Website)**  
-   *Expected:* `SAFE` (Green) | *Signal:* All layer risks low; normal links are never blocked.
-2. **Fresh Phishing Zero-Day (`secure-phonepe-refund.xyz`)**  
-   *Expected:* `BLOCK` (Red) | *Signal:* M1 flags low domain age, typosquatting, and abused TLD.
-3. **Signed City Parking QR (`pay.citypark.example`)**  
-   *Expected:* `SAFE` with **✓ QRSHIELD CERTIFIED** badge | *Signal:* Root-verified Ed25519 signature.
-4. **Physical Sticker Swap (Clean URL Pasted Over Parking Meter)**  
-   *Expected:* `SUSPICIOUS` or `BLOCK` | *Signal:* M2 flags boundary discontinuity, straight cutlines, and micro-shadows with Grad-CAM heatmap.
-5. **Forged / Tampered Token QR**  
-   *Expected:* `BLOCK` | *Signal:* M3 catches cryptographic signature mismatch.
-6. **User Feedback Reporting & Retraining Gate**  
-   *Expected:* Feedback stored in SQLite review queue; admin approves and executes `make retrain`.
-
----
-
-## 7. Results & Benchmark Summary
-
-* **URL ML Classifier (M1)**: **97.8% Accuracy**, **1.000 Recall** on zero-day time-split benchmark; 0.0% false-positive rate on verified benign college/banking URLs.
-* **Computer Vision Tamper Layer (M2)**: **94.4% Accuracy**, **95.6% Recall** across 6 distinct physical substrates under grouped cross-validation.
-* **Cryptographic Layer (M3)**: **100% Rejection** of forged, tampered, expired, and revoked signatures.
-* **Ablation Evidence**: Individual layers miss 48–53% of composite attacks; the three-layer pipeline achieves **96.7% overall quishing detection**.
-* **Scan Latency**: Entire end-to-end multi-layer scan completes in **$< 0.7\text{ seconds}$** ($p_{95}$).
-
-Full benchmark tables, confusion matrices, and ablation figures are documented in [`docs/evaluation.md`](docs/evaluation.md).
-
----
-
-## 8. Team Organisation (Team Black Sparrow)
-
-| Squad / Member | Module Responsibility | Key Deliverables |
-|---|---|---|
-| **Akshit Sharma (Lead)** | Engine (M4), System Integration, Architecture | Interface contracts, aggregation engine, release coordination |
-| **URL / Payload ML Squad** (2 Members) | M1: Data curation, lexical features, typosquatting, SSRF guard | Calibrated model, feature pipelines, notebooks, `model.joblib` |
-| **Computer Vision Squad** (3 Members) | M2: Photo collection, rectification, multi-physics features | Homography warp, edge/shadow/print features, Grad-CAM overlay |
-| **Crypto & Registry Squad** (2 Members) | M3: Ed25519 library, mini-PKI, CRL, issuer portal | `keys.py`, `pki.py`, `revocation.py`, `threat_model.md` |
-| **App & Frontend Squad** (1 Member) | M5: Single-page UI, camera streaming, report flow | Responsive mobile/desktop web app, safe interaction UI |
-| **Evaluation & QA Squad** (1 Member) | QA, CI workflow, evaluation reports, demo rehearsals | 43 unit & red-team tests, `docs/evaluation.md`, demo kit |
-
----
-
-## 9. License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT - see [LICENSE](LICENSE). Datasets keep their own licences (see [`data/README_data.md`](data/README_data.md)).

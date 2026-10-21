@@ -1,81 +1,45 @@
-# QRshield Live Demonstration Script & Viva Defense Guide (F41)
+# Live demo script (about 8 minutes)
 
-This document contains the step-by-step presentation script, rehearsed actions, backup protocols, and crisp viva question answers for Team Black Sparrow.
+## Before you start (5 minutes, the day before and again 30 minutes before)
 
----
+1. `run_demo.bat` (Windows) or `python -m qrshield setup && python -m qrshield serve`. The console prints the **admin token** - keep it handy.
+2. **Print the props on the laptop you will demo from** (signed codes only verify against the registry that signed them):
+   `python -m qrshield demo-assets` -> `demo_assets/demo_sheet_A4.png`. Print at 100 %. Cut the six codes out.
+3. Build the props: a cardboard "parking meter" with code **#3** glued on; a table tent with code **#1**. Keep code **#4** (the "clean sticker") loose with peelable adhesive; stick it over #3 for scenario 4. Print the sheet twice and keep spares.
+4. Phone camera over HTTPS (browsers block live cameras on plain http except on localhost): `python -m qrshield serve --https --host 0.0.0.0`, open the printed `https://<laptop-ip>:8000` on the phone, accept the certificate once. If that is fiddly on the day, use **Photo > Take photo** - it opens the phone's camera app and works over http.
+5. Backup: the six **simulated scenario photos** in the UI need no props or camera. Record a 3-minute screen video of them as a last resort.
 
-## 1. Demo Setup and Physical Props
+## The six scenarios
 
-- **Physical Props**:
-  * Cardboard mock "Parking Meter" with pre-printed QR code base.
-  * Restaurant table tent stand with UPI QR.
-  * Pre-cut sticker overlays on vinyl and paper backing with clean-peeling adhesive.
-- **Hardware & Software**:
-  * Laptop running QRshield backend on `localhost:8000`.
-  * Mobile phone on a small stand connected to local WiFi / laptop hotspot.
-  * Seeded SQLite registry initialized via `python -m scripts.seed_registry`.
-- **Backup Plan**:
-  * Pre-rendered scenario images accessible via the top quick-test bar buttons.
-  * Offline cached WHOIS/DNS tables (`HOST_CACHE`) ensuring zero reliance on campus WiFi.
+| # | Do | Expect | What to say |
+|---|---|---|---|
+| 1 | Scan code #1 (college site) | **SAFE** | "Normal codes are not blocked - false alarms are a cost we measure." Point at "not digitally signed, so we cannot prove who issued it" |
+| 2 | Scan code #2 (PhonePe look-alike) | **BLOCK** | "No blocklist has seen this domain. The model flags a brand look-alike on a throw-away TLD; open *Show the working*." Show the Open button is hidden behind an override |
+| 3 | Scan code #3 on the cardboard meter | **SAFE + QRSHIELD CERTIFIED** | "Signed by the registered business: root-signed certificate, domain-bound, Ed25519 signature." Read out issuer, certified domain, expiry from the card |
+| 4 | Stick #4 over #3, scan the meter | **SUSPICIOUS** | "A URL-only scanner sees a clean link. The photo shows the pasted edge, the shadow and the *original code's corners peeking out* - see the overlay." Also: M3 says "Unsigned" - the signed original is hidden |
+| 5 | Scan code #5 (edited token) | **BLOCK** | "Same code, path changed after signing - the signature no longer matches. A code that *claims* certification and fails is worse than an unsigned one." |
+| 6 | Press **Report** on #2, open Admin, approve, press **Retrain** | report queued -> model history shows promote/reject | "A person approves; the retrained model must beat the live one on a fixed benchmark and get canary links right, otherwise it is rejected - that blocks poisoning." |
 
----
+**Bonus crypto moments (1 minute each):** Issuer portal -> generate a signed QR -> *Scan this code now* -> certified; then **Revoke** the issuer and scan again -> **BLOCK, revoked** (CRL version increments); **Rotate key** -> old codes revoked, new ones valid. Press *Restore all issuers* to reset.
 
-## 2. Six Rehearsed Live Demo Scenarios (Section 13)
+## If something goes wrong
 
-### Scenario 1: Scan Ordinary Unsigned Genuine Code
-- **Action**: Scan genuine SPIT college website placard (`https://spit.ac.in/departments/comps`).
-- **Expected Verdict**: `SAFE` (Green banner, Risk $< 0.20$, No Certified badge).
-- **Explanation to Judges**:
-  > *"Normal everyday QR codes are not blocked. Because false positives annoy users, our calibrated ML model and low visual tamper score correctly classify this as SAFE."*
+* **Camera will not start / no HTTPS:** use Photo > Take photo, or the simulated scenarios.
+* **Glare or blur:** the UI says "Retake photo" and refuses to judge - say so, it is a feature (it never gives a verdict from an unreadable photo).
+* **A scenario gives a different verdict on a real photo:** say honestly that the sticker model was trained on simulated photos and show the evaluation report's limitations; then show the same scenario in simulated form.
 
-### Scenario 2: Scan a Fresh Zero-Day Phishing QR
-- **Action**: Scan lookalike payment domain (`https://secure-phonepe-refund.xyz/claim-cashback?amt=2000`).
-- **Expected Verdict**: `BLOCK` (Red banner, M1 fires: Typosquatting + Abused TLD).
-- **Explanation to Judges**:
-  > *"Traditional scanners and blocklists fail here because this domain was registered 3 days ago and appears on no blacklist. Our URL ML classifier catches it using lexical entropy, brand Jaro-Winkler distance, and domain age before any browser window opens."*
+## Likely viva questions - short answers
 
-### Scenario 3: Scan a Signed City Parking QR
-- **Action**: Scan genuine municipal parking placard with Ed25519 token (`https://pay.citypark.example/m/42?qrs=...`).
-- **Expected Verdict**: `SAFE` with **✓ QRSHIELD CERTIFIED** badge (Green banner).
-- **Explanation to Judges**:
-  > *"This QR code is provably authentic. The scanner validated the business's Ed25519 certificate against our pinned Root Authority, verified that the domain matches the certificate, and confirmed the signature over the canonical URL. Normal phones open the parking payment link directly without installing anything."*
-
-### Scenario 4: Paste a Sticker Over the Parking Code (Physical Tamper)
-- **Action**: Hand-paste a pre-printed sticker (carrying a clean-looking URL) over the parking placard, then scan the meter.
-- **Expected Verdict**: `SUSPICIOUS` or `BLOCK` (Red/Yellow banner, M2 fires: Sticker boundary + cutline detected, Grad-CAM glowing red).
-- **Explanation to Judges**:
-  > *"URL-only scanners say this link is fine. But this is the attack happening at real parking meters across the world. Our Computer Vision layer detects the physical sticker boundary, straight cutlines, and 3D micro-shadows, displaying the glowing Grad-CAM heatmap overlay to alert the user."*
-
-### Scenario 5: Scan a Forged or Tampered Token QR
-- **Action**: Scan a QR where an attacker copied a valid token but changed `/m/42` to `/m/99` or used a self-signed key.
-- **Expected Verdict**: `BLOCK` (Red banner, M3 fires: Cryptographic verification failed).
-- **Explanation to Judges**:
-  > *"The attacker tried to claim certification without possessing the registered private key. Under our rule-first design, a code claiming authenticity that fails cryptographic verification is stronger evidence of attack than an unsigned code, triggering an immediate BLOCK."*
-
-### Scenario 6: User Feedback Reporting & Admin Retraining Loop
-- **Action**: Press **🚩 Report Feedback** in the UI, enter note *"Suspect sticker on Andheri meter"*, switch to Admin tab, approve the report, and show `make retrain`.
-- **Expected Verdict**: Report accepted into SQLite database; Admin human gate prevents data-poisoning before retraining.
-- **Explanation to Judges**:
-  > *"When a user flags a novel attack, it enters our privacy-preserving review queue. A human administrator approves the sample before our benchmark gate retrains and promotes the updated model."*
-
----
-
-## 3. Anticipated Viva Questions & Crisp Answers
-
-#### Q1: Why Ed25519 and not RSA-2048 or ECDSA?
-**Answer**: Ed25519 signatures are only 64 bytes (RSA-2048 is 256 bytes), allowing the token to fit in a compact, easily scannable QR code. Unlike ECDSA, Ed25519 signs deterministically, eliminating catastrophic private key leaks caused by repeated or biased random nonces.
-
-#### Q2: What if someone copies a genuine signed QR and pastes it elsewhere (Replay Attack)?
-**Answer**: A static digital signature proves who created the payload, not where it is physically pasted. We mitigate replay attacks three ways: binding a location ID (`loc`) checked against the registry, enforcing short expiration timestamps (`exp`), and detecting physical sticker overlays via our CV layer (M2).
-
-#### Q3: How does the application trust the registry?
-**Answer**: The Root Authority's public key is hardcoded and pinned inside the QRshield application. All issuer certificates and Certificate Revocation Lists (CRLs) must be cryptographically signed by this pinned root key.
-
-#### Q4: Why not just use a blocklist like Google Safe Browsing or PhishTank?
-**Answer**: Blocklists are purely reactive—they only know attacks *after* victims have already been compromised and reported them. Blocklists cannot catch zero-day phishing links created 10 minutes ago, and they cannot see a physical sticker pasted over a benign code.
-
-#### Q5: How do you prevent the analyzer from being abused as a Server-Side Request Forgery (SSRF) vector?
-**Answer**: In `fetch_safe.py`, we resolve DNS ourselves before connecting and reject all private IP ranges (RFC 1918), loopback (`127.0.0.1`), link-local metadata addresses (`169.254.169.254`), and carrier-grade NAT on every hop. We enforce a 3-second timeout, cap response size to 50KB, and never execute JavaScript.
-
-#### Q6: What are the genuine limitations of the system?
-**Answer**: The CV model requires adequate lighting and can be hindered by heavy specular glare or flush industrial die-cut reprints. The cryptographic layer requires merchant adoption to display the Certified badge. Unsigned codes rely on our ML and CV layers.
+| Question | Answer |
+|---|---|
+| Why Ed25519, not RSA or ECDSA? | 64-byte signatures keep the QR sparse (RSA-2048 is 256 B), deterministic signing avoids nonce-reuse bugs, fast verification, strong security level, audited library. |
+| What if someone copies a genuine signed code elsewhere? | Replay is a limit of every signature scheme. We sign location + expiry, show the location, and the sticker check flags paste-overs; rolling tokens for payment counters are the next step. We say this up front. |
+| How does the app trust the registry? | The root public key is pinned in the verifier; certificates and the CRL must verify against it. No pinned key means nothing verifies (fail closed). |
+| Why verify the signature before checking expiry? | Otherwise a forged token could claim to be "expired" and get a milder verdict. |
+| What stops an attacker rolling the CRL back? | Verifiers keep the highest CRL version seen and verify its signature. |
+| Why can a photo never BLOCK on its own? | Visual evidence is probabilistic with a measured false-positive rate; BLOCK needs another independent layer or a cryptographic fact. |
+| Is the sticker detector accurate? | On simulated photos, leave-one-surface-out AUC is about 0.88; it catches imperfect covers but not a perfectly fitted sticker. It has not been measured on real photos yet - see `docs/evaluation.md`. |
+| How do you stop the analyser being abused to attack the network? | SSRF guard: http(s) only, resolve once, globally-routable addresses only, connect to the validated IP (rebinding-proof), re-validate every redirect, HEAD only, timeouts. |
+| Why are the URL results lower than papers that report 99 %? | We removed dataset shortcuts (scheme, `www.`, path presence, per-domain flooding) and evaluate on an external corpus and 2026 feeds. Raw corpora let a model "cheat"; the report shows the bias with numbers. |
+| What is the privacy impact? | Photos are not stored; reports hold a link, a label and a note; telemetry holds only hashes and timings. |
+| Which CNS concepts are in the project? | Digital signatures, PKI and certificates, domain binding, key rotation and revocation (signed, versioned CRL, rollback protection), domain separation, hashing, replay analysis, TLS for the phone camera, SSRF defence, secure parsing of hostile input, rate limiting, CSP, and a human-gated, benchmark-gated learning loop. |
