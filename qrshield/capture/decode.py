@@ -1,242 +1,290 @@
 """
-QR Detection and Decoding (F01, F02, F03)
-Robust multi-stage QR code detector using OpenCV QRCodeDetector with
-adaptive pre-processing fallbacks, multi-code / stacked sticker detection,
-and corner extraction for perspective rectification.
+QR detection and decoding (F01, F02, F03).
+
+Decoder order: zxing-cpp (robust on real photos: perspective, glare, rotation, inverted codes)
+-> OpenCV QRCodeDetector / Aruco detector -> pyzbar (optional). Each runs on a handful of
+cheap pre-processed variants (CLAHE, threshold, upscale) until something decodes.
+
+Every frame also yields the *corner points* of the code (needed by the tamper layer) and a
+"stacked code" check: two QR-like regions overlapping in the frame is a strong indicator of a
+half-covered sticker.
 """
+from __future__ import annotations
+
 import io
+from dataclasses import dataclass, field
+from typing import Any, Dict, Iterator, List, Optional, Tuple
+
 import cv2
 import numpy as np
-from PIL import Image
-from typing import Dict, Any, Tuple, Optional, List
+from PIL import Image, ImageOps
 
+from qrshield import config
 from qrshield.capture.payload_types import parse_payload_type
-from qrshield.capture.quality import assess_image_quality
+from qrshield.capture.quality import assess_image_quality, order_corners
 
+MAX_SIDE = 2000          # photos are down-scaled so every layer sees a consistent resolution
+
+try:                      # zxing-cpp is the primary decoder; the OpenCV path keeps things working without it
+    import zxingcpp
+except ImportError:       # pragma: no cover - exercised only on stripped-down installs
+    zxingcpp = None
+
+
+@dataclass
+class Code:
+    text: str
+    corners: np.ndarray            # (4, 2) float32: TL, TR, BR, BL in image coordinates
+    source: str
+    detail: Dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def bbox(self) -> Tuple[float, float, float, float]:
+        x, y = self.corners[:, 0], self.corners[:, 1]
+        return float(x.min()), float(y.min()), float(x.max()), float(y.max())
+
+    @property
+    def area(self) -> float:
+        x0, y0, x1, y1 = self.bbox
+        return max(0.0, (x1 - x0) * (y1 - y0))
+
+
+@dataclass
+class FrameResult:
+    codes: List[Code]
+    primary: Optional[Code]
+    stacked: bool = False
+    stacked_details: str = ""
+
+
+# --------------------------------------------------------------------------- image loading
 def bytes_to_cv2_image(image_bytes: bytes) -> np.ndarray:
-    """Safely decodes image bytes into a BGR OpenCV numpy array."""
-    nparr = np.frombuffer(image_bytes, np.uint8)
-    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    """Decode untrusted image bytes into a BGR array, refusing oversized inputs first."""
+    if not image_bytes:
+        raise ValueError("empty image")
+    if len(image_bytes) > config.MAX_UPLOAD_BYTES:
+        raise ValueError("image exceeds the upload size limit")
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as probe:
+            width, height = probe.size
+    except Exception as exc:
+        raise ValueError(f"not a valid image: {exc}") from exc
+    if width * height > config.MAX_IMAGE_PIXELS:
+        raise ValueError("image dimensions exceed the safety limit")
+
+    arr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)        # applies EXIF orientation
     if img is None:
-        # Fallback to PIL in case of exotic header formats
         try:
-            pil_img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-            img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
-        except Exception as e:
-            raise ValueError(f"Failed to decode image bytes: {e}")
+            pil = ImageOps.exif_transpose(Image.open(io.BytesIO(image_bytes))).convert("RGB")
+            img = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
+        except Exception as exc:
+            raise ValueError(f"failed to decode image: {exc}") from exc
+    return normalize_resolution(img)
+
+
+def normalize_resolution(img: np.ndarray) -> np.ndarray:
+    h, w = img.shape[:2]
+    longest = max(h, w)
+    if longest > MAX_SIDE:
+        s = MAX_SIDE / longest
+        img = cv2.resize(img, (int(w * s), int(h * s)), interpolation=cv2.INTER_AREA)
     return img
 
-def check_overlapping_regions(boxes: List[np.ndarray]) -> bool:
+
+# --------------------------------------------------------------------------- decoders
+def _zxing(img: np.ndarray) -> List[Code]:
+    if zxingcpp is None:
+        return []
+    try:
+        results = zxingcpp.read_barcodes(img, formats=zxingcpp.BarcodeFormat.QRCode)
+    except Exception:
+        return []
+    out = []
+    for r in results:
+        if not r.valid or not r.text:
+            continue
+        p = r.position
+        pts = np.array([[p.top_left.x, p.top_left.y], [p.top_right.x, p.top_right.y],
+                        [p.bottom_right.x, p.bottom_right.y], [p.bottom_left.x, p.bottom_left.y]], dtype=np.float32)
+        out.append(Code(r.text, pts, "zxing", {"ec_level": getattr(r, "ec_level", "")}))
+    return out
+
+
+def _opencv(img: np.ndarray) -> List[Code]:
+    detectors = [cv2.QRCodeDetector()]
+    if hasattr(cv2, "QRCodeDetectorAruco"):
+        detectors.append(cv2.QRCodeDetectorAruco())
+    for det in detectors:
+        try:
+            text, pts, _ = det.detectAndDecode(img)
+        except cv2.error:
+            continue
+        if text and pts is not None and np.size(pts) >= 8:
+            return [Code(text, order_corners(pts), "opencv")]
+    return []
+
+
+def _pyzbar(img: np.ndarray) -> List[Code]:
+    try:
+        from pyzbar.pyzbar import decode as zbar_decode
+    except Exception:
+        return []
+    out = []
+    try:
+        for b in zbar_decode(img):
+            if b.type != "QRCODE":
+                continue
+            text = b.data.decode("utf-8", errors="replace")
+            if text and len(b.polygon) == 4:
+                pts = np.array([[q.x, q.y] for q in b.polygon], dtype=np.float32)
+                out.append(Code(text, order_corners(pts), "pyzbar"))
+    except Exception:
+        return []
+    return out
+
+
+def _variants(img: np.ndarray) -> Iterator[Tuple[np.ndarray, float]]:
+    """Cheap pre-processing variants as (image, scale_factor_vs_original)."""
+    yield img, 1.0
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    yield cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8)).apply(gray), 1.0
+    yield cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 7), 1.0
+    h, w = gray.shape[:2]
+    if max(h, w) <= 1200:
+        yield cv2.resize(gray, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC), 2.0
+    blur = cv2.GaussianBlur(gray, (0, 0), 3)
+    yield cv2.addWeighted(gray, 1.8, blur, -0.8, 0), 1.0
+    yield cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1], 1.0
+
+
+def _iou_like(a: Code, b: Code) -> Tuple[float, float]:
+    """Return (intersection / union, intersection / smaller-area) of the two bounding boxes."""
+    ax0, ay0, ax1, ay1 = a.bbox
+    bx0, by0, bx1, by1 = b.bbox
+    iw, ih = min(ax1, bx1) - max(ax0, bx0), min(ay1, by1) - max(ay0, by0)
+    if iw <= 0 or ih <= 0:
+        return 0.0, 0.0
+    inter = iw * ih
+    return inter / (a.area + b.area - inter + 1e-6), inter / (min(a.area, b.area) + 1e-6)
+
+
+def finder_pattern_centres(gray: np.ndarray) -> np.ndarray:
+    """Centres of QR finder patterns (concentric 7:5:3-module squares) found anywhere in the frame.
+
+    A QR code has exactly three. Finder patterns that do not belong to any decodable code are the
+    visible remnants of another code - for example an original code peeking out from under a sticker.
     """
-    Checks if any two detected bounding boxes overlap significantly,
-    which indicates a sticker pasted over or adjacent to another QR.
-    """
-    if len(boxes) < 2:
-        return False
-    # Check pairwise intersection of axis-aligned bounding rectangles
-    rects = []
-    for b in boxes:
-        pts = np.squeeze(b)
-        x_min, y_min = np.min(pts, axis=0)
-        x_max, y_max = np.max(pts, axis=0)
-        rects.append((x_min, y_min, x_max, y_max))
+    scale = min(1.0, 1000.0 / max(gray.shape[:2]))
+    g = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA) if scale < 1.0 else gray
+    g = cv2.GaussianBlur(g, (3, 3), 0)
+    ink = cv2.adaptiveThreshold(g, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 25, 8)
+    contours, hier = cv2.findContours(ink, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    if hier is None:
+        return np.zeros((0, 2), np.float32)
+    hier = hier[0]
+    found: List[Tuple[float, float, float]] = []
+    for i, cnt in enumerate(contours):
+        child = hier[i][2]
+        if child < 0:
+            continue
+        grand = hier[child][2]
+        if grand < 0:
+            continue
+        a0, a1, a2 = (cv2.contourArea(contours[k]) for k in (i, child, grand))
+        if a0 < 100 or a1 <= 0 or a2 <= 0:
+            continue
+        x, y, w, h = cv2.boundingRect(cnt)
+        if not (0.6 <= w / max(h, 1) <= 1.6) or a0 / (w * h) < 0.55:
+            continue
+        if 1.3 <= a0 / a1 <= 2.9 and 1.8 <= a1 / a2 <= 4.3:
+            found.append(((x + w / 2) / scale, (y + h / 2) / scale, np.sqrt(a0) / scale))
+    merged: List[Tuple[float, float, float]] = []
+    for cx, cy, r in sorted(found, key=lambda t: -t[2]):
+        if all(np.hypot(cx - mx, cy - my) > 0.6 * max(r, mr) for mx, my, mr in merged):
+            merged.append((cx, cy, r))
+    return np.asarray([(m[0], m[1]) for m in merged], np.float32).reshape(-1, 2)
 
-    for i in range(len(rects)):
-        for j in range(i + 1, len(rects)):
-            r1 = rects[i]
-            r2 = rects[j]
-            # Intersection coordinates
-            ix_min = max(r1[0], r2[0])
-            iy_min = max(r1[1], r2[1])
-            ix_max = min(r1[2], r2[2])
-            iy_max = min(r1[3], r2[3])
 
-            if ix_min < ix_max and iy_min < iy_max:
-                inter_area = (ix_max - ix_min) * (iy_max - iy_min)
-                area1 = (r1[2] - r1[0]) * (r1[3] - r1[1])
-                area2 = (r2[2] - r2[0]) * (r2[3] - r2[1])
-                overlap_ratio = inter_area / min(area1, area2 + 1e-6)
-                if overlap_ratio > 0.15:  # Over 15% overlap
-                    return True
-    return False
+def _inside(point: np.ndarray, code: Code, grow: float = 0.15) -> bool:
+    c = code.corners.mean(axis=0)
+    quad = (c + (code.corners - c) * (1.0 + grow)).astype(np.float32)
+    return cv2.pointPolygonTest(quad.reshape(-1, 1, 2), (float(point[0]), float(point[1])), False) >= 0
 
-def check_nested_contours(gray: np.ndarray, corners: np.ndarray) -> bool:
-    """
-    Detects if the QR code sits inside another larger concentric square-like
-    boundary (classic signature of a replacement sticker).
-    """
-    if corners is None or len(corners) == 0:
-        return False
-    pts = np.squeeze(corners)
-    if pts.shape != (4, 2):
-        return False
 
-    qr_center = np.mean(pts, axis=0)
-    qr_side = np.mean([
-        np.linalg.norm(pts[0] - pts[1]),
-        np.linalg.norm(pts[1] - pts[2])
-    ])
+def _stacked_check(gray: np.ndarray, codes: List[Code]) -> Tuple[bool, str]:
+    """A code pasted over another one leaves tell-tale traces: overlapping decodable codes, or extra finder patterns."""
+    for i in range(len(codes)):
+        for j in range(i + 1, len(codes)):
+            iou, smaller = _iou_like(codes[i], codes[j])
+            if smaller > 0.15 and iou < 0.85:
+                return True, "Two QR codes overlap in the frame - a code may be pasted over another one."
+    if not codes:
+        return False, ""
+    centres = finder_pattern_centres(gray)
+    extras = [c for c in centres if not any(_inside(c, code) for code in codes)]
+    if len(extras) >= 2:
+        return True, f"{len(extras)} extra QR finder patterns were found outside this code - part of another code is visible underneath."
+    return False, ""
 
-    # Find external contours
-    edges = cv2.Canny(gray, 50, 150)
-    contours, _ = cv2.findContours(edges, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 
-    stacked_found = False
-    for cnt in contours:
-        area = cv2.contourArea(cnt)
-        if area > (qr_side * 1.1) ** 2 and area < (qr_side * 3.0) ** 2:
-            peri = cv2.arcLength(cnt, True)
-            approx = cv2.approxPolyDP(cnt, 0.04 * peri, True)
-            # If 4-sided contour enclosing QR center
-            if len(approx) == 4 and cv2.isContourConvex(approx):
-                dist = cv2.pointPolygonTest(approx, (float(qr_center[0]), float(qr_center[1])), False)
-                if dist >= 0:
-                    stacked_found = True
-                    break
-    return stacked_found
+def analyze_frame(img: np.ndarray) -> FrameResult:
+    """Find and decode QR codes in a BGR frame."""
+    codes: List[Code] = []
+    for variant, scale in _variants(img):
+        found = _zxing(variant)
+        if found:
+            if scale != 1.0:
+                for c in found:
+                    c.corners = c.corners / scale
+            codes = found
+            break
+    if not codes:
+        codes = _opencv(img)
+    if not codes:
+        codes = _pyzbar(img)
+    if not codes:
+        return FrameResult([], None)
+
+    codes.sort(key=lambda c: c.area, reverse=True)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+    stacked, details = _stacked_check(gray, codes)
+    return FrameResult(codes, codes[0], stacked, details)
+
 
 def decode_qr(img: np.ndarray) -> Tuple[Optional[str], Optional[np.ndarray], bool, str]:
-    """
-    Multi-stage QR detector and decoder.
-    Returns: (payload, corners, multi_code_flag, details)
-    """
-    detector = cv2.QRCodeDetector()
+    """Compatibility wrapper: (payload, corners, stacked_flag, details)."""
+    res = analyze_frame(img)
+    if res.primary is None:
+        return None, None, False, "No valid QR code detected in image."
+    return res.primary.text, res.primary.corners, res.stacked, res.stacked_details
 
-    if len(img.shape) == 3:
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    else:
-        gray = img.copy()
 
-    # Pass 1: Multi-code detection check first
-    multi_code_flag = False
-    details = ""
-    try:
-        multi_success, decoded_info, points, _ = detector.detectAndDecodeMulti(img)
-        if multi_success and points is not None and len(points) > 1:
-            if check_overlapping_regions([pts for pts in points]):
-                multi_code_flag = True
-                details = "Multiple overlapping QR regions detected in frame."
-    except Exception:
-        pass
-
-    # Pass 2: Direct detectAndDecode
-    payload, corners, _ = detector.detectAndDecode(img)
-    if payload:
-        if not multi_code_flag and check_nested_contours(gray, corners):
-            multi_code_flag = True
-            details = "Possible stacked code detected (outer contour enclosing QR)."
-        return payload, corners, multi_code_flag, details
-
-    # Pass 3: CLAHE (Contrast Limited Adaptive Histogram Equalization)
-    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-    enhanced = clahe.apply(gray)
-    payload, corners, _ = detector.detectAndDecode(enhanced)
-    if payload:
-        return payload, corners, multi_code_flag, details
-
-    # Pass 4: Adaptive Thresholding
-    thresh = cv2.adaptiveThreshold(
-        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 21, 5
-    )
-    payload, corners, _ = detector.detectAndDecode(thresh)
-    if payload:
-        return payload, corners, multi_code_flag, details
-
-    # Pass 5: 2x Upscaling for small QR codes
-    h, w = gray.shape[:2]
-    upscaled = cv2.resize(gray, (w * 2, h * 2), interpolation=cv2.INTER_CUBIC)
-    payload, corners_up, _ = detector.detectAndDecode(upscaled)
-    if payload and corners_up is not None:
-        corners = corners_up / 2.0
-        return payload, corners, multi_code_flag, details
-
-    # Pass 6: Otsu Thresholding
-    _, otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    payload, corners, _ = detector.detectAndDecode(otsu)
-    if payload:
-        return payload, corners, multi_code_flag, details
-
-    # Pass 7: OpenCV Aruco QR Detector (more robust corner pattern recognition)
-    if hasattr(cv2, "QRCodeDetectorAruco"):
-        try:
-            aruco_det = cv2.QRCodeDetectorAruco()
-            p_aruco, c_aruco, _ = aruco_det.detectAndDecode(img)
-            if p_aruco:
-                return p_aruco, c_aruco, multi_code_flag, details
-        except Exception:
-            pass
-
-    # Pass 8: pyzbar Fallback (industry-standard zbar barcode library)
-    try:
-        from pyzbar.pyzbar import decode as pyzbar_decode
-        barcodes = pyzbar_decode(img)
-        if not barcodes:
-            barcodes = pyzbar_decode(gray)
-        if barcodes:
-            for b in barcodes:
-                if b.type == "QRCODE":
-                    p_str = b.data.decode("utf-8", errors="ignore")
-                    if p_str:
-                        pts = b.polygon
-                        if len(pts) == 4:
-                            corners = np.array([[[pt.x, pt.y] for pt in pts]], dtype=np.float32)
-                        else:
-                            rect = b.rect
-                            corners = np.array([[[rect.left, rect.top], [rect.left + rect.width, rect.top], [rect.left + rect.width, rect.top + rect.height], [rect.left, rect.top + rect.height]]], dtype=np.float32)
-                        return p_str, corners, multi_code_flag, details
-    except Exception:
-        pass
-
-    return None, None, False, "No valid QR code detected in image."
-
+# --------------------------------------------------------------------------- M0 entry point
 def capture_and_decode(image_bytes: bytes) -> Dict[str, Any]:
-    """
-    Full M0 capture and decode pipeline.
-    """
+    """Full M0 pipeline: load, decode, type the payload, assess quality."""
     try:
         img = bytes_to_cv2_image(image_bytes)
-    except Exception as e:
-        return {
-            "success": False,
-            "error": f"Invalid image format: {e}",
-            "payload": None,
-            "payload_type": "other",
-            "corners": None,
-            "quality": assess_image_quality(None, None),
-            "multi_code": False,
-            "raw_image": image_bytes
-        }
+    except ValueError as exc:
+        return {"success": False, "error": str(exc), "payload": None, "payload_type": "other",
+                "corners": None, "quality": assess_image_quality(None, None), "multi_code": False,
+                "codes": [], "image": None}
 
-    payload, corners, multi_code, multi_details = decode_qr(img)
-    quality = assess_image_quality(img, corners)
+    frame = analyze_frame(img)
+    quality = assess_image_quality(img, frame.primary.corners if frame.primary else None)
+    if frame.primary is None:
+        return {"success": False, "error": "No QR code found. Centre the code in the frame and retake the photo.",
+                "payload": None, "payload_type": "other", "corners": None, "quality": quality,
+                "multi_code": False, "codes": [], "image": img}
 
-    if not payload:
-        return {
-            "success": False,
-            "error": "Could not detect or decode QR code.",
-            "payload": None,
-            "payload_type": "other",
-            "corners": None,
-            "quality": quality,
-            "multi_code": False,
-            "raw_image": image_bytes
-        }
-
+    payload = frame.primary.text
     ptype, pmeta = parse_payload_type(payload)
-
-    # Convert corners to plain list for JSON serialization if needed
-    corners_list = corners.tolist() if corners is not None else None
-
     return {
-        "success": True,
-        "error": None,
-        "payload": payload,
-        "payload_type": ptype,
-        "payload_meta": pmeta,
-        "corners": corners_list,
-        "corners_np": corners,
-        "multi_code": multi_code,
-        "multi_code_details": multi_details,
-        "quality": quality,
-        "raw_image": image_bytes
+        "success": True, "error": None,
+        "payload": payload, "payload_type": ptype, "payload_meta": pmeta,
+        "corners": frame.primary.corners.tolist(), "corners_np": frame.primary.corners,
+        "multi_code": frame.stacked, "multi_code_details": frame.stacked_details,
+        "codes": [{"text": c.text[:200], "source": c.source} for c in frame.codes],
+        "decoder": frame.primary.source,
+        "quality": quality, "image": img,
     }

@@ -1,47 +1,28 @@
 """
-Model Retraining and Quality Gate Pipeline (F35).
-Extracts human-approved reports from the SQLite database, merges them with
-the core benchmark dataset, trains a candidate model, compares metrics against
-the benchmark gate, and promotes only if performance is maintained or improved.
-Defends against data poisoning.
+Human-gated retraining from the command line (F35).
+
+    python -m scripts.retrain
+
+Trains a candidate on the bundled base corpus + reports an admin approved, compares it with the active
+model on the fixed benchmark and canary links, and promotes it only if it is not worse.
 """
-import os
-import joblib
-from qrshield.url_layer.train import train_and_evaluate_model, build_benchmark_dataset
-from qrshield.registry.admin import SessionLocal, ScanReport
+import json
 
-def retrain_pipeline():
-    print("[*] Starting continuous retraining pipeline (F35)...")
-    db = SessionLocal()
-    approved_reports = []
-    try:
-        rows = db.query(ScanReport).filter_by(status="approved").all()
-        for r in rows:
-            label = 1 if r.user_label in ("phishing", "tampered") else 0
-            approved_reports.append({"url": r.url, "domain": "community_reported", "label": label})
-    finally:
-        db.close()
+from qrshield import retrain
+from qrshield.registry import Registry
 
-    print(f"[+] Loaded {len(approved_reports)} human-approved reports from admin queue.")
 
-    # Train and evaluate candidate model
-    candidate_metrics = train_and_evaluate_model()
-
-    print(f"[+] Candidate Model Performance:")
-    print(f"    - Accuracy : {candidate_metrics['accuracy'] * 100:.2f}%")
-    print(f"    - ROC-AUC  : {candidate_metrics['roc_auc']:.4f}")
-    print(f"    - F1-Score : {candidate_metrics['f1']:.4f}")
-
-    # Benchmark Quality Gate
-    # Threshold: Must achieve >= 0.95 ROC-AUC on held-out validation set
-    GATE_MIN_AUC = 0.95
-    if candidate_metrics["roc_auc"] >= GATE_MIN_AUC:
-        print(f"[PASS] Benchmark Gate PASSED (ROC-AUC {candidate_metrics['roc_auc']} >= {GATE_MIN_AUC}). Model promoted to production!")
-        return True
-    else:
-        print(f"[FAIL] Benchmark Gate FAILED (ROC-AUC {candidate_metrics['roc_auc']} < {GATE_MIN_AUC}). Promotion rejected to prevent regression.")
-        return False
+def main() -> int:
+    reg = Registry().ensure_ready()
+    result = retrain.run(reg)
+    gate = result["gate"]
+    print(f"candidate {result['version']}: {'PROMOTED' if result['promoted'] else 'REJECTED'} "
+          f"(+{result['approved_reports_used']} approved reports, {result['seconds']} s)")
+    for name, ok in gate["checks"].items():
+        print(f"  [{'pass' if ok else 'FAIL'}] {name}")
+    print(json.dumps({k: {m: gate[k][m] for m in ('roc_auc', 'tpr_at_1pct_fpr', 'fpr', 'canaries_correct')} for k in ('active', 'candidate')}, indent=2))
+    return 0 if result["promoted"] else 1
 
 
 if __name__ == "__main__":
-    retrain_pipeline()
+    raise SystemExit(main())

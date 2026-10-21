@@ -1,0 +1,4 @@
+-r requirements.txt
+# only needed to rebuild the URL corpus / retrain from scratch (python -m qrshield data / train-url)
+pandas>=2.1
+pyarrow>=15

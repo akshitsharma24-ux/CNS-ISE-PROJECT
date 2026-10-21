@@ -1,0 +1,357 @@
+{
+  "generated_at": "2026-10-21",
+  "n_simulated_photos": 4800,
+  "n_usable": 4706,
+  "n_real_photos": 0,
+  "n_features": 48,
+  "decode_success_rate": 0.9973,
+  "measurement_failures": {
+    "no_code": 13,
+    "low_quality": 19,
+    "partial_view": 62
+  },
+  "data_is_simulated": true,
+  "decode_rate_by_blur": {
+    "<0.5": 0.9979,
+    "0.5-1.2": 0.9972,
+    ">1.2": 0.995
+  },
+  "decode_rate_by_qr_px": {
+    "<250": 0.996,
+    "250-400": 1.0,
+    ">400": 0.995
+  },
+  "leave_one_surface_out": {
+    "n": 4706,
+    "recall": 0.7423,
+    "false_positive_rate": 0.1143,
+    "accuracy": 0.8151,
+    "roc_auc": 0.8805
+  },
+  "group_5fold_by_session": {
+    "n": 4706,
+    "recall": 0.7117,
+    "false_positive_rate": 0.0913,
+    "accuracy": 0.8117,
+    "roc_auc": 0.9021
+  },
+  "per_surface_unseen": {
+    "cardboard": {
+      "n": 585,
+      "recall": 0.7301,
+      "false_positive_rate": 0.0304,
+      "accuracy": 0.8513,
+      "roc_auc": 0.9143
+    },
+    "glass": {
+      "n": 591,
+      "recall": 0.7491,
+      "false_positive_rate": 0.16,
+      "accuracy": 0.7953,
+      "roc_auc": 0.8545
+    },
+    "glossy_poster": {
+      "n": 586,
+      "recall": 0.8153,
+      "false_positive_rate": 0.2375,
+      "accuracy": 0.7884,
+      "roc_auc": 0.8623
+    },
+    "matte_paper": {
+      "n": 589,
+      "recall": 0.8408,
+      "false_positive_rate": 0.22,
+      "accuracy": 0.8098,
+      "roc_auc": 0.8981
+    },
+    "metal": {
+      "n": 595,
+      "recall": 0.6373,
+      "false_positive_rate": 0.0133,
+      "accuracy": 0.8134,
+      "roc_auc": 0.8797
+    },
+    "painted_wall": {
+      "n": 585,
+      "recall": 0.731,
+      "false_positive_rate": 0.1322,
+      "accuracy": 0.8,
+      "roc_auc": 0.8912
+    },
+    "plastic": {
+      "n": 583,
+      "recall": 0.7782,
+      "false_positive_rate": 0.0368,
+      "accuracy": 0.8731,
+      "roc_auc": 0.9237
+    },
+    "wood": {
+      "n": 592,
+      "recall": 0.661,
+      "false_positive_rate": 0.0833,
+      "accuracy": 0.7905,
+      "roc_auc": 0.8325
+    }
+  },
+  "per_style": {
+    "exact_fit": {
+      "n": 514,
+      "recall": 0.4747,
+      "false_positive_rate": null
+    },
+    "framed_card": {
+      "n": 317,
+      "recall": null,
+      "false_positive_rate": 0.1041
+    },
+    "genuine_sticker": {
+      "n": 641,
+      "recall": null,
+      "false_positive_rate": 0.1841
+    },
+    "laminated_print": {
+      "n": 413,
+      "recall": null,
+      "false_positive_rate": 0.1114
+    },
+    "larger": {
+      "n": 373,
+      "recall": 0.3807,
+      "false_positive_rate": null
+    },
+    "offset_rotated": {
+      "n": 539,
+      "recall": 0.9907,
+      "false_positive_rate": null
+    },
+    "printed_direct": {
+      "n": 199,
+      "recall": null,
+      "false_positive_rate": 0.0
+    },
+    "printed_flat": {
+      "n": 819,
+      "recall": null,
+      "false_positive_rate": 0.0928
+    },
+    "smaller": {
+      "n": 551,
+      "recall": 0.9782,
+      "false_positive_rate": null
+    },
+    "wrinkled": {
+      "n": 340,
+      "recall": 0.7676,
+      "false_positive_rate": null
+    }
+  },
+  "inconclusive_band": {
+    "band": [
+      0.38,
+      0.62
+    ],
+    "fraction_of_photos": 0.1003,
+    "accuracy_outside_band": 0.8403,
+    "accuracy_inside_band": 0.589
+  },
+  "threshold_table": [
+    {
+      "threshold": 0.3,
+      "recall": 0.8356,
+      "false_positive_rate": 0.2821,
+      "accuracy": 0.7758
+    },
+    {
+      "threshold": 0.4,
+      "recall": 0.7656,
+      "false_positive_rate": 0.1528,
+      "accuracy": 0.8071
+    },
+    {
+      "threshold": 0.5,
+      "recall": 0.7423,
+      "false_positive_rate": 0.1143,
+      "accuracy": 0.8151
+    },
+    {
+      "threshold": 0.6,
+      "recall": 0.669,
+      "false_positive_rate": 0.0611,
+      "accuracy": 0.806
+    },
+    {
+      "threshold": 0.7,
+      "recall": 0.6176,
+      "false_positive_rate": 0.0381,
+      "accuracy": 0.7924
+    },
+    {
+      "threshold": 0.8,
+      "recall": 0.5887,
+      "false_positive_rate": 0.0239,
+      "accuracy": 0.7854
+    },
+    {
+      "threshold": 0.9,
+      "recall": 0.5404,
+      "false_positive_rate": 0.0155,
+      "accuracy": 0.7658
+    }
+  ],
+  "per_condition": {
+    "qr_px": {
+      "<250": {
+        "n": 1231,
+        "recall": 0.7159,
+        "false_positive_rate": 0.1281,
+        "accuracy": 0.792,
+        "roc_auc": 0.8639
+      },
+      "250-400": {
+        "n": 1935,
+        "recall": 0.7356,
+        "false_positive_rate": 0.0963,
+        "accuracy": 0.8222,
+        "roc_auc": 0.8783
+      },
+      ">400": {
+        "n": 1540,
+        "recall": 0.773,
+        "false_positive_rate": 0.1264,
+        "accuracy": 0.8247,
+        "roc_auc": 0.8974
+      }
+    },
+    "exposure": {
+      "dark<0.8": {
+        "n": 1070,
+        "recall": 0.7396,
+        "false_positive_rate": 0.1074,
+        "accuracy": 0.8168,
+        "roc_auc": 0.8754
+      },
+      "mid": {
+        "n": 1817,
+        "recall": 0.7354,
+        "false_positive_rate": 0.1405,
+        "accuracy": 0.7986,
+        "roc_auc": 0.876
+      },
+      "bright>1.05": {
+        "n": 1819,
+        "recall": 0.7508,
+        "false_positive_rate": 0.092,
+        "accuracy": 0.8307,
+        "roc_auc": 0.8868
+      }
+    },
+    "tilt": {
+      "low": {
+        "n": 2060,
+        "recall": 0.7354,
+        "false_positive_rate": 0.1132,
+        "accuracy": 0.8126,
+        "roc_auc": 0.8829
+      },
+      "mid": {
+        "n": 2646,
+        "recall": 0.7477,
+        "false_positive_rate": 0.1151,
+        "accuracy": 0.8171,
+        "roc_auc": 0.8789
+      }
+    }
+  },
+  "feature_group_ablation_loso_auc": {
+    "all_features": 0.8805,
+    "edges": {
+      "only_auc": 0.8584,
+      "without_auc": 0.8507
+    },
+    "shadow": {
+      "only_auc": 0.7632,
+      "without_auc": 0.8751
+    },
+    "colour": {
+      "only_auc": 0.5804,
+      "without_auc": 0.8823
+    },
+    "texture": {
+      "only_auc": 0.7091,
+      "without_auc": 0.8846
+    },
+    "specular": {
+      "only_auc": 0.608,
+      "without_auc": 0.8858
+    },
+    "peeking_code": {
+      "only_auc": 0.7468,
+      "without_auc": 0.8838
+    },
+    "frames": {
+      "only_auc": 0.6952,
+      "without_auc": 0.8834
+    }
+  },
+  "baselines_loso_auc": {
+    "logistic_regression": 0.8038,
+    "random_forest": 0.8848,
+    "lightgbm": 0.8805
+  },
+  "second_photo": {
+    "n_scenes": 457,
+    "single_photo": {
+      "n": 457,
+      "recall": 0.7748,
+      "false_positive_rate": 0.1234,
+      "accuracy": 0.8271,
+      "roc_auc": 0.894
+    },
+    "second_photo_alone": {
+      "n": 457,
+      "recall": 0.7477,
+      "false_positive_rate": 0.1234,
+      "accuracy": 0.814,
+      "roc_auc": 0.8906
+    },
+    "two_photos_average": {
+      "n": 457,
+      "recall": 0.7342,
+      "false_positive_rate": 0.0936,
+      "accuracy": 0.8228,
+      "roc_auc": 0.9035
+    },
+    "two_photos_plus_cue_w0.05": {
+      "n": 457,
+      "recall": 0.7523,
+      "false_positive_rate": 0.1149,
+      "accuracy": 0.8206,
+      "roc_auc": 0.9012
+    },
+    "two_photos_plus_cue_w0.12": {
+      "n": 457,
+      "recall": 0.7658,
+      "false_positive_rate": 0.1277,
+      "accuracy": 0.8206,
+      "roc_auc": 0.8972
+    },
+    "two_photos_plus_cue_w0.25": {
+      "n": 457,
+      "recall": 0.7928,
+      "false_positive_rate": 0.217,
+      "accuracy": 0.7877,
+      "roc_auc": 0.8879
+    },
+    "chosen_cue_weight": 0.0,
+    "borderline_subset": {
+      "n": 62,
+      "accuracy_single_photo": 0.6613,
+      "accuracy_two_photos": 0.6613
+    },
+    "cue_mean_tampered_vs_genuine": [
+      0.3864,
+      0.2833
+    ]
+  },
+  "model_latency_ms": 0.28
+}

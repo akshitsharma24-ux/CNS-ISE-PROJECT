@@ -1,208 +1,192 @@
 """
-SSRF-safe URL fetcher and passive redirect follower (F09).
-Protects the analysis engine against Server-Side Request Forgery (SSRF)
-by resolving DNS independently, blocking private/loopback/link-local/cloud-metadata
-IP ranges on every hop, capping payload sizes, and executing no client scripts.
+SSRF-safe passive URL inspection (F09).
+
+Resolving or fetching an attacker-chosen URL from our server is an SSRF risk. Defences here:
+  * only http/https; redirects are followed manually and EVERY hop is re-validated
+  * DNS is resolved by us, every returned address must be globally routable, and the socket is
+    then connected to that validated IP - there is no second resolution an attacker could
+    answer differently (DNS rebinding / TOCTOU)
+  * IPv4-mapped / 6to4 / Teredo IPv6 forms are unwrapped and re-checked, and numeric host
+    spellings ("2130706433", "0x7f.1") are handled because we validate resolved addresses
+  * HEAD requests only, hard timeouts, no cookies, no body read, no JavaScript, max 5 hops
 """
-import socket
+from __future__ import annotations
+
+import http.client
 import ipaddress
-from urllib.parse import urlparse, urljoin
-import tldextract
-import requests
-from typing import Dict, Any, List, Optional, Tuple
+import socket
+import ssl
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urljoin
+
+from qrshield.netutil import safe_urlparse, split_host
 
 KNOWN_SHORTENERS = {
-    "bit.ly", "tinyurl.com", "t.co", "cutt.ly", "is.gd",
-    "ow.ly", "buff.ly", "goo.gl", "rebrand.ly", "tiny.cc",
-    "qr.ae", "v.gd", "rb.gy", "shorturl.at"
+    "bit.ly", "tinyurl.com", "t.co", "cutt.ly", "is.gd", "ow.ly", "buff.ly", "goo.gl", "rebrand.ly",
+    "tiny.cc", "qr.ae", "v.gd", "rb.gy", "shorturl.at", "t.ly", "s.id", "lnkd.in", "bit.do", "shorturl.asia",
 }
+USER_AGENT = "QRshield-SafeInspector/2.0 (+passive-head-only)"
+
+
+class SSRFBlocked(Exception):
+    pass
+
 
 def is_ip_allowed(ip_str: str) -> Tuple[bool, str]:
-    """
-    Validates if an IP address is a safe, routable public address.
-    Rejects:
-      - Loopback (127.0.0.0/8, ::1)
-      - RFC1918 Private (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
-      - Link-Local (169.254.0.0/16, fe80::/10) - Cloud metadata AWS/GCP (169.254.169.254)
-      - Carrier-Grade NAT (100.64.0.0/10)
-      - Multicast & Reserved ranges
-    """
+    """True only for globally routable unicast addresses."""
     try:
-        ip = ipaddress.ip_address(ip_str)
+        ip = ipaddress.ip_address(ip_str.strip("[]"))
     except ValueError:
-        return False, f"Invalid IP address format: {ip_str}"
-
+        return False, f"SSRF blocked: invalid IP address {ip_str!r}"
+    if isinstance(ip, ipaddress.IPv6Address):
+        embedded = ip.ipv4_mapped or ip.sixtofour or (ip.teredo[1] if ip.teredo else None)
+        if embedded is not None:
+            return is_ip_allowed(str(embedded))
+        if ip in ipaddress.ip_network("64:ff9b::/96"):            # NAT64 -> embedded IPv4
+            return is_ip_allowed(str(ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)))
     if ip.is_loopback:
-        return False, f"SSRF blocked: Loopback address {ip_str}"
-    if ip.is_private:
-        return False, f"SSRF blocked: RFC1918 Private address {ip_str}"
+        return False, f"SSRF blocked: loopback address {ip}"
     if ip.is_link_local:
-        return False, f"SSRF blocked: Link-local / metadata address {ip_str}"
+        return False, f"SSRF blocked: link-local / cloud-metadata address {ip}"
+    if ip.is_private:
+        return False, f"SSRF blocked: private (RFC1918/ULA) address {ip}"
     if ip.is_multicast:
-        return False, f"SSRF blocked: Multicast address {ip_str}"
-    if ip.is_reserved:
-        return False, f"SSRF blocked: Reserved IP address {ip_str}"
-    # Carrier-Grade NAT RFC 6598 (100.64.0.0/10)
-    if ip.version == 4 and ip in ipaddress.ip_network("100.64.0.0/10"):
-        return False, f"SSRF blocked: Carrier-Grade NAT address {ip_str}"
-    # Specific cloud metadata check
-    if str(ip) == "169.254.169.254":
-        return False, "SSRF blocked: Cloud metadata service"
+        return False, f"SSRF blocked: multicast address {ip}"
+    if not ip.is_global:                                          # CGNAT, reserved, documentation, 0.0.0.0 ...
+        return False, f"SSRF blocked: non-global address {ip}"
+    return True, "public address"
 
 
-    return True, "Public IP"
+def resolve_public(host: str, port: int) -> List[Tuple[int, str]]:
+    """Resolve `host` and return validated (family, ip) pairs; raise SSRFBlocked otherwise."""
+    if not host:
+        raise SSRFBlocked("SSRF blocked: empty hostname")
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise SSRFBlocked(f"DNS resolution failed for {host}: {exc}") from exc
+    pairs = []
+    for family, _, _, _, sockaddr in infos:
+        ok, reason = is_ip_allowed(sockaddr[0])
+        if not ok:
+            raise SSRFBlocked(reason)          # one bad record poisons the whole answer
+        pairs.append((family, sockaddr[0]))
+    if not pairs:
+        raise SSRFBlocked(f"no addresses for {host}")
+    return pairs
+
 
 def safe_resolve_host(hostname: str) -> Tuple[bool, str, List[str]]:
-    """Resolves DNS and verifies all resulting IPs against SSRF restrictions."""
+    """Backwards-compatible wrapper: (allowed, reason, ips)."""
     try:
-        # Avoid resolving empty or malformed names
-        if not hostname:
-            return False, "Empty hostname", []
-        # Check if hostname itself is raw IP
+        pairs = resolve_public(hostname, 80)
+        return True, "OK", [ip for _, ip in pairs]
+    except SSRFBlocked as exc:
+        return False, str(exc), []
+
+
+def _connect_validated(host: str, port: int, timeout: float, allow_private: bool = False) -> socket.socket:
+    last: Optional[Exception] = None
+    if allow_private:                                    # tests only
+        return socket.create_connection((host, port), timeout)
+    for family, ip in resolve_public(host, port):
         try:
-            raw_ip = ipaddress.ip_address(hostname)
-            ok, reason = is_ip_allowed(str(raw_ip))
-            return ok, reason, [str(raw_ip)]
-        except ValueError:
-            pass
+            sock = socket.socket(family, socket.SOCK_STREAM)
+            sock.settimeout(timeout)
+            sock.connect((ip, port))                     # connect to the IP we validated
+            return sock
+        except OSError as exc:
+            last = exc
+    raise OSError(f"could not connect to {host}:{port}: {last}")
 
-        addr_info = socket.getaddrinfo(hostname, None)
-        ips = list({info[4][0] for info in addr_info})
-        if not ips:
-            return False, f"DNS resolution failed for {hostname}", []
 
-        for ip in ips:
-            allowed, reason = is_ip_allowed(ip)
-            if not allowed:
-                return False, reason, ips
+class _PinnedHTTP(http.client.HTTPConnection):
+    allow_private = False
 
-        return True, "OK", ips
-    except Exception as e:
-        return False, f"DNS error: {str(e)}", []
+    def connect(self) -> None:
+        self.sock = _connect_validated(self.host, self.port, self.timeout, self.allow_private)
+
+
+class _PinnedHTTPS(http.client.HTTPSConnection):
+    allow_private = False
+
+    def connect(self) -> None:
+        raw = _connect_validated(self.host, self.port, self.timeout, self.allow_private)
+        ctx = ssl.create_default_context()
+        self.sock = ctx.wrap_socket(raw, server_hostname=self.host)
+
+
+def head_once(url: str, timeout: float = 3.0, allow_private: bool = False) -> Tuple[int, Dict[str, str]]:
+    """One HEAD request, no redirects. Raises SSRFBlocked / OSError / ssl.SSLError."""
+    p = safe_urlparse(url)
+    if p is None or p.scheme not in ("http", "https") or not p.hostname:
+        raise SSRFBlocked("SSRF blocked: only absolute http(s) URLs are fetched")
+    port = p.port or (443 if p.scheme == "https" else 80)
+    cls = _PinnedHTTPS if p.scheme == "https" else _PinnedHTTP
+    conn = cls(p.hostname, port, timeout=timeout)
+    conn.allow_private = allow_private
+    try:
+        target = (p.path or "/") + (f"?{p.query}" if p.query else "")
+        conn.request("HEAD", target, headers={"User-Agent": USER_AGENT, "Accept": "*/*", "Connection": "close"})
+        resp = conn.getresponse()
+        return resp.status, {k.lower(): v for k, v in resp.getheaders()}
+    finally:
+        conn.close()
+
 
 def expand_and_inspect_redirects(
-    url: str,
-    max_hops: int = 5,
-    timeout: float = 3.0
+    url: str, max_hops: int = 5, timeout: float = 3.0, allow_private: bool = False
 ) -> Dict[str, Any]:
-    """
-    Passively traces HTTP redirects up to max_hops while enforcing SSRF security.
-    Does not execute JavaScript, limits response bytes to 50KB, rejects private IPs.
-    """
-    current_url = url
-    hops: List[str] = [current_url]
-    hop_count = 0
-    shortener_detected = False
+    """Trace redirects hop by hop (validating each) and report what a shortener hides."""
+    hops: List[str] = [url]
+    first = safe_urlparse(url)
+    base = {"safe": True, "error": None, "initial_url": url, "final_url": url, "hop_count": 0, "hops": hops,
+            "shortener_used": False, "domain_changed": False, "tld_changed": False, "signals": [], "reached": False}
+    if first is None or first.scheme not in ("http", "https"):
+        return {**base, "safe": False, "error": "Disallowed scheme. Only http/https are inspected."}
 
-    parsed_init = urlparse(url)
-    if parsed_init.scheme not in ("http", "https"):
-        return {
-            "safe": False,
-            "error": f"Disallowed scheme '{parsed_init.scheme}'. Only http/https permitted.",
-            "final_url": url,
-            "hop_count": 0,
-            "hops": hops,
-            "shortener_used": False,
-            "domain_changed": False,
-            "tld_changed": False,
-            "signals": []
-        }
-
-    init_extract = tldextract.extract(parsed_init.netloc)
-    init_domain = f"{init_extract.domain}.{init_extract.suffix}".lower()
-    if parsed_init.netloc.lower() in KNOWN_SHORTENERS:
-        shortener_detected = True
-
-    # Custom session with no cookie persistence
-    session = requests.Session()
-    session.headers.update({"User-Agent": "QRshield-SafeInspector/1.0 (+security-audit)"})
-    session.cookies.clear()
-
-    while hop_count < max_hops:
-        parsed = urlparse(current_url)
-        host = parsed.hostname or parsed.netloc.split(":")[0]
-
-        # SSRF Verification before issuing request
-        is_safe_ip, reason, _ = safe_resolve_host(host)
-        if not is_safe_ip:
-            return {
-                "safe": False,
-                "error": f"SSRF Guard triggered at hop {hop_count}: {reason}",
-                "final_url": current_url,
-                "hop_count": hop_count,
-                "hops": hops,
-                "shortener_used": shortener_detected,
-                "domain_changed": False,
-                "tld_changed": False,
-                "signals": [{
-                    "name": "ssrf_attempt_blocked",
-                    "value": host,
-                    "text": f"Blocked SSRF attempt targeting {reason}"
-                }]
-            }
-
+    init_host = (first.hostname or "").lower()
+    init_parts = split_host(init_host)
+    shortener = init_host in KNOWN_SHORTENERS or init_parts.registered in KNOWN_SHORTENERS
+    current = url
+    for hop in range(max_hops):
         try:
-            # HEAD request with stream to prevent reading full bodies
-            resp = session.head(
-                current_url,
-                allow_redirects=False,
-                timeout=timeout,
-                stream=True
-            )
-            # Check for redirect status
-            if resp.status_code in (301, 302, 303, 307, 308):
-                location = resp.headers.get("Location")
-                if not location:
-                    break
-                next_url = urljoin(current_url, location)
-                hops.append(next_url)
-                current_url = next_url
-                hop_count += 1
-                next_host = urlparse(next_url).netloc.lower()
-                if next_host in KNOWN_SHORTENERS:
-                    shortener_detected = True
-            else:
+            status, headers = head_once(current, timeout, allow_private)
+        except SSRFBlocked as exc:
+            base.update(safe=False, error=str(exc), final_url=current, hop_count=hop, shortener_used=shortener)
+            base["signals"] = [{"name": "ssrf_blocked", "value": current,
+                                "text": f"A redirect pointed at a non-public address and was not followed ({exc})."}]
+            return base
+        except (OSError, ssl.SSLError, http.client.HTTPException):
+            break                                    # network trouble is not a verdict
+        base["reached"] = True
+        loc = headers.get("location")
+        if status in (301, 302, 303, 307, 308) and loc:
+            current = urljoin(current, loc)
+            hops.append(current)
+            nxt = safe_urlparse(current)
+            if nxt is None or nxt.scheme not in ("http", "https"):
                 break
-        except requests.exceptions.RequestException:
-            # Graceful network failure: never crash
+            nh = (nxt.hostname or "").lower()
+            shortener = shortener or nh in KNOWN_SHORTENERS or split_host(nh).registered in KNOWN_SHORTENERS
+        else:
             break
 
-    final_parsed = urlparse(current_url)
-    final_extract = tldextract.extract(final_parsed.netloc)
-    final_domain = f"{final_extract.domain}.{final_extract.suffix}".lower()
-
-    domain_changed = (init_domain != final_domain) and bool(final_domain)
-    tld_changed = (init_extract.suffix != final_extract.suffix) and bool(final_extract.suffix)
-
+    final = safe_urlparse(current)
+    final_parts = split_host((final.hostname or "") if final else "")
+    domain_changed = bool(final_parts.registered) and final_parts.registered != init_parts.registered
+    base.update(final_url=current, hop_count=len(hops) - 1, shortener_used=shortener,
+                domain_changed=domain_changed,
+                tld_changed=bool(final_parts.suffix) and final_parts.suffix != init_parts.suffix)
     signals = []
-    if shortener_detected:
-        signals.append({
-            "name": "url_shortener",
-            "value": True,
-            "text": "URL shortener detected hiding target destination."
-        })
-    if hop_count > 1:
-        signals.append({
-            "name": "multiple_redirects",
-            "value": hop_count,
-            "text": f"URL traversed {hop_count} redirect hops."
-        })
-    if domain_changed:
-        signals.append({
-            "name": "domain_redirect_mismatch",
-            "value": {"from": init_domain, "to": final_domain},
-            "text": f"Redirect switches domains from '{init_domain}' to '{final_domain}'."
-        })
-
-    return {
-        "safe": True,
-        "error": None,
-        "initial_url": url,
-        "final_url": current_url,
-        "hop_count": hop_count,
-        "hops": hops,
-        "shortener_used": shortener_detected,
-        "domain_changed": domain_changed,
-        "tld_changed": tld_changed,
-        "signals": signals
-    }
+    if shortener:
+        signals.append({"name": "url_shortener", "value": True, "text": "A URL shortener hides the real destination."})
+    if base["hop_count"] > 1:
+        signals.append({"name": "multiple_redirects", "value": base["hop_count"],
+                        "text": f"The link bounces through {base['hop_count']} redirects."})
+    if domain_changed and base["reached"]:
+        signals.append({"name": "domain_redirect_mismatch",
+                        "value": {"from": init_parts.registered, "to": final_parts.registered},
+                        "text": f"The link redirects from '{init_parts.registered}' to '{final_parts.registered}'."})
+    base["signals"] = signals
+    return base

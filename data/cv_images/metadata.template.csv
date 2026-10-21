@@ -1,0 +1,4 @@
+image_id,class_label,session_id,surface,sticker_material,phone_model,lighting,angle_deg,tamper_style
+IMG_0001.jpg,0,SESSION_01,metal,none,Pixel7,daylight,0,none
+IMG_0002.jpg,1,SESSION_01,metal,matte_paper,Pixel7,daylight,0,exact_fit
+IMG_0003.jpg,1,SESSION_02,wood,glossy_vinyl,iPhone14,warm_indoor,30,smaller

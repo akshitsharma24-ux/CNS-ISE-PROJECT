@@ -1,0 +1,3 @@
+# Documentation / test entries only (reserved example domains). Real feeds go in <home>/blocklist.txt.
+known-bad-demo.example
+https://qr-parking-fraud.example/pay/session

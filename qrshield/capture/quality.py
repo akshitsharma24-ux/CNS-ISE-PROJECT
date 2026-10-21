@@ -1,110 +1,103 @@
 """
-Image quality gate (F05)
-Evaluates sharpness (Laplacian variance), glare (saturated pixels),
-and physical pixel size of the QR code to guide user capture and
-protect downstream CV and URL models from noisy evaluations.
+Image quality gate (F05).
+
+Quality is measured on the QR region itself (rectified to a canonical size) rather than on
+the whole photograph, so a white poster is not mistaken for glare and a busy background is
+not mistaken for sharpness. The gate guards the *visual tamper* layer: a poor photo must
+produce a "retake" hint, never an unfair verdict.
 """
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional
+
 import cv2
 import numpy as np
-from typing import Dict, Any, List, Optional
 
-def assess_image_quality(
-    img: np.ndarray,
-    corners: Optional[np.ndarray] = None
-) -> Dict[str, Any]:
-    """
-    Evaluates blur, glare, and resolution of the input image.
+CANON = 240                 # QR region is warped to CANON x CANON before measuring
+MIN_SIDE_PX = 90            # smaller than this and texture analysis is meaningless
+BLUR_VAR_MIN = 55.0         # variance of Laplacian on the canonical crop
+GLARE_TILE_FRACTION = 0.12
+MAX_SKEW = 1.6              # ratio of opposite QR sides (extreme viewing angle)
 
-    Parameters:
-        img: BGR or Grayscale numpy image
-        corners: Detected QR 4 corner points if available
 
-    Returns:
-        dict:
-            - blur_score: float (Laplacian variance)
-            - is_blurry: bool
-            - glare_ratio: float (fraction of saturated pixels)
-            - is_glare: bool
-            - qr_side_length_px: float or None
-            - is_too_small: bool
-            - status: "ok" | "low_quality" | "inconclusive"
-            - hints: list[str] of actionable suggestions
-    """
+def order_corners(pts: np.ndarray) -> np.ndarray:
+    """Return corners as top-left, top-right, bottom-right, bottom-left."""
+    pts = np.asarray(pts, dtype=np.float32).reshape(-1, 2)
+    s = pts.sum(axis=1)
+    d = np.diff(pts, axis=1).ravel()
+    return np.array([pts[np.argmin(s)], pts[np.argmin(d)], pts[np.argmax(s)], pts[np.argmax(d)]], dtype=np.float32)
+
+
+def _side_lengths(c: np.ndarray) -> List[float]:
+    return [float(np.linalg.norm(c[i] - c[(i + 1) % 4])) for i in range(4)]
+
+
+def qr_crop(gray: np.ndarray, corners: np.ndarray) -> np.ndarray:
+    dst = np.array([[0, 0], [CANON - 1, 0], [CANON - 1, CANON - 1], [0, CANON - 1]], dtype=np.float32)
+    m = cv2.getPerspectiveTransform(order_corners(corners), dst)
+    return cv2.warpPerspective(gray, m, (CANON, CANON), flags=cv2.INTER_AREA)
+
+
+def assess_image_quality(img: Optional[np.ndarray], corners: Optional[np.ndarray] = None) -> Dict[str, Any]:
+    if img is None or img.size == 0:
+        return {"status": "low_quality", "blur_score": 0.0, "is_blurry": True, "glare_ratio": 0.0,
+                "is_glare": False, "qr_side_length_px": None, "is_too_small": True, "skew_ratio": None,
+                "hints": ["The image could not be read."]}
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+    h, w = gray.shape[:2]
     hints: List[str] = []
 
-    if img is None or img.size == 0:
-        return {
-            "status": "low_quality",
-            "blur_score": 0.0,
-            "is_blurry": True,
-            "glare_ratio": 1.0,
-            "is_glare": False,
-            "qr_side_length_px": 0.0,
-            "is_too_small": True,
-            "hints": ["Image could not be read or is empty."]
-        }
+    side = None
+    skew = None
+    region = gray
+    if corners is not None and np.size(corners) >= 8:
+        c = order_corners(corners)
+        sides = _side_lengths(c)
+        side = float(np.mean(sides))
+        skew = max(max(sides[0], sides[2]) / max(min(sides[0], sides[2]), 1e-3),
+                   max(sides[1], sides[3]) / max(min(sides[1], sides[3]), 1e-3))
+        try:
+            region = qr_crop(gray, c)
+        except cv2.error:
+            region = gray
 
-    # Convert to grayscale if necessary
-    if len(img.shape) == 3:
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    else:
-        gray = img
-
-    h, w = gray.shape[:2]
-
-    # 1. Blur Detection using Laplacian Variance
-    lap_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
-    # Typical threshold: < 60 indicates moderate to severe blur
-    is_blurry = lap_var < 50.0
+    # Blur: variance of the Laplacian of the canonical QR crop
+    blur_score = float(cv2.Laplacian(region, cv2.CV_64F).var())
+    is_blurry = blur_score < BLUR_VAR_MIN
     if is_blurry:
-        hints.append("Hold steady - image appears blurry.")
+        hints.append("Hold steady - the code looks blurry. Tap to focus and retake.")
 
-    # 2. Glare Detection (percentage of near-saturated pixels)
-    # Highlight pixels > 250 in 8-bit scale
-    saturated_pixels = np.sum(gray >= 250)
-    total_pixels = gray.size
-    glare_ratio = float(saturated_pixels / max(total_pixels, 1))
-    # If over 6% is pure white glare, reflection is high
-    is_glare = glare_ratio > 0.06
+    # Glare: tiles of the QR region that lost all contrast while bright (washed-out highlight)
+    t = CANON // 6
+    washed = 0
+    for ty in range(6):
+        for tx in range(6):
+            tile = region[ty * t:(ty + 1) * t, tx * t:(tx + 1) * t]
+            if int(tile.max()) - int(tile.min()) < 25 and tile.mean() > 200:
+                washed += 1
+    glare_ratio = washed / 36.0
+    is_glare = glare_ratio > GLARE_TILE_FRACTION
     if is_glare:
-        hints.append("Tilt to avoid glare - reflections detected on surface.")
+        hints.append("Tilt the phone slightly to avoid the reflection on the code.")
 
-    # 3. QR code pixel size
-    qr_side_length = None
-    is_too_small = False
-    if corners is not None and len(corners) > 0:
-        pts = np.squeeze(corners)
-        if pts.shape == (4, 2):
-            side1 = np.linalg.norm(pts[0] - pts[1])
-            side2 = np.linalg.norm(pts[1] - pts[2])
-            side3 = np.linalg.norm(pts[2] - pts[3])
-            side4 = np.linalg.norm(pts[3] - pts[0])
-            qr_side_length = float(np.mean([side1, side2, side3, side4]))
-            # If the QR code side length is less than 110 pixels, resolution is low
-            if qr_side_length < 110.0:
-                is_too_small = True
-                hints.append("Move closer - QR code is too small in frame.")
-    else:
-        # If no corners, evaluate against overall image dimensions
-        if min(h, w) < 200:
-            is_too_small = True
-            hints.append("Image resolution is very low.")
+    is_small = False
+    if side is not None:
+        if side < MIN_SIDE_PX:
+            is_small = True
+            hints.append("Move closer - the code is too small in the frame.")
+        if skew is not None and skew > MAX_SKEW:
+            hints.append("Hold the phone more square-on to the code.")
+    elif min(h, w) < 200:
+        is_small = True
+        hints.append("The image resolution is very low.")
 
-    # Determine overall status
-    if is_blurry or is_too_small:
-        status = "low_quality"
-    elif is_glare:
-        status = "inconclusive"
-    else:
-        status = "ok"
-
+    status = "low_quality" if (is_blurry or is_small) else ("inconclusive" if is_glare else "ok")
     return {
-        "blur_score": round(lap_var, 2),
-        "is_blurry": is_blurry,
-        "glare_ratio": round(glare_ratio, 4),
-        "is_glare": is_glare,
-        "qr_side_length_px": round(qr_side_length, 1) if qr_side_length else None,
-        "is_too_small": is_too_small,
         "status": status,
-        "hints": hints
+        "blur_score": round(blur_score, 1), "is_blurry": is_blurry,
+        "glare_ratio": round(glare_ratio, 3), "is_glare": is_glare,
+        "qr_side_length_px": round(side, 1) if side else None, "is_too_small": is_small,
+        "skew_ratio": round(skew, 2) if skew else None,
+        "hints": hints,
     }

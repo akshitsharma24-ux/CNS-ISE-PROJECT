@@ -1,49 +1,59 @@
 """
-Ed25519 Key Management and Serialization (F23).
-Uses standard cryptography.hazmat.primitives.asymmetric.ed25519.
-Audited primitives: Never hand-roll crypto.
+Ed25519 key management and base64url helpers (F23).
+
+Only audited primitives from the `cryptography` package are used - no hand-rolled crypto.
 """
+from __future__ import annotations
+
 import base64
+import binascii
 from typing import Tuple
-from cryptography.hazmat.primitives.asymmetric import ed25519
+
 from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ed25519
+
+
+def b64u_encode(raw: bytes) -> str:
+    """base64url without padding (compact, URL- and QR-friendly)."""
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def b64u_decode(text: str) -> bytes:
+    """Strict base64url decode that tolerates stripped padding."""
+    if not isinstance(text, str):
+        raise ValueError("base64url value must be a string")
+    try:
+        return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError(f"invalid base64url: {exc}") from exc
+
 
 def generate_keypair() -> Tuple[ed25519.Ed25519PrivateKey, ed25519.Ed25519PublicKey]:
-    """Generates an Ed25519 private/public keypair."""
     private_key = ed25519.Ed25519PrivateKey.generate()
-    public_key = private_key.public_key()
-    return private_key, public_key
+    return private_key, private_key.public_key()
+
 
 def export_public_key_b64(public_key: ed25519.Ed25519PublicKey) -> str:
-    """Exports raw 32-byte public key as base64url string."""
-    raw_bytes = public_key.public_bytes(
-        encoding=serialization.Encoding.Raw,
-        format=serialization.PublicFormat.Raw
+    return b64u_encode(
+        public_key.public_bytes(
+            encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw
+        )
     )
-    return base64.urlsafe_b64encode(raw_bytes).decode("ascii").rstrip("=")
 
-def load_public_key_b64(b64_str: str) -> ed25519.Ed25519PublicKey:
-    """Loads Ed25519 public key from base64url string."""
-    # Add padding if stripped
-    padding = len(b64_str) % 4
-    if padding:
-        b64_str += "=" * (4 - padding)
-    raw_bytes = base64.urlsafe_b64decode(b64_str)
-    return ed25519.Ed25519PublicKey.from_public_bytes(raw_bytes)
 
 def export_private_key_b64(private_key: ed25519.Ed25519PrivateKey) -> str:
-    """Exports raw 32-byte private key as base64url string."""
-    raw_bytes = private_key.private_bytes(
-        encoding=serialization.Encoding.Raw,
-        format=serialization.PrivateFormat.Raw,
-        encryption_algorithm=serialization.NoEncryption()
+    return b64u_encode(
+        private_key.private_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PrivateFormat.Raw,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
     )
-    return base64.urlsafe_b64encode(raw_bytes).decode("ascii").rstrip("=")
 
-def load_private_key_b64(b64_str: str) -> ed25519.Ed25519PrivateKey:
-    """Loads Ed25519 private key from base64url string."""
-    padding = len(b64_str) % 4
-    if padding:
-        b64_str += "=" * (4 - padding)
-    raw_bytes = base64.urlsafe_b64decode(b64_str)
-    return ed25519.Ed25519PrivateKey.from_private_bytes(raw_bytes)
+
+def load_public_key_b64(text: str) -> ed25519.Ed25519PublicKey:
+    return ed25519.Ed25519PublicKey.from_public_bytes(b64u_decode(text))
+
+
+def load_private_key_b64(text: str) -> ed25519.Ed25519PrivateKey:
+    return ed25519.Ed25519PrivateKey.from_private_bytes(b64u_decode(text))

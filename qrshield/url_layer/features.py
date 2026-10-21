@@ -1,422 +1,184 @@
 """
-URL feature extraction engine (F06, F07, F08, F10).
-Extracts lexical, structural, keyword, typosquatting, host, and SSL/DNS features.
-Includes demo caching so evaluations and demonstrations work offline without flakiness.
+URL feature extraction for the M1 classifier (F06, F08).
+
+Design rules (these exist because public phishing corpora are biased - see docs/evaluation.md):
+  * Features are computed from the URL *string only*. No live WHOIS/DNS/TLS lookups feed the
+    model, so training and serving see identical inputs and scans are fast and offline-safe.
+  * The scheme is deliberately NOT a feature (most corpora strip it from benign rows) and a
+    leading "www." is removed, so the model cannot learn collection artefacts.
+  * Path/query features are only trusted because the training set is resampled to have the
+    same path/query rate in both classes.
 """
+from __future__ import annotations
+
 import math
 import re
-import socket
-import ssl
-from datetime import datetime, timezone
-from urllib.parse import urlparse
-import tldextract
-import whois
-from typing import Dict, Any, List, Tuple, Optional
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
 
-from qrshield.url_layer.brands import (
-    check_brand_typosquat,
-    check_brand_in_subdomain_or_path,
-    TARGET_BRANDS
-)
+from qrshield.netutil import HostParts, hostname_of, safe_urlparse, split_host
+from qrshield.url_layer import brands as B
 
-# High-risk TLDs frequently abused in quishing campaigns
-ABUSED_TLDS = {
-    "tk", "ml", "ga", "cf", "gq", "top", "xyz", "club",
-    "work", "biz", "monster", "vip", "icu", "buzz", "click",
-    "fit", "rest", "cam", "kim", "sbs", "cfd", "online", "site"
-}
-
-# Suspicious keywords in authentication and financial quishing
-SUSPICIOUS_KEYWORDS = [
-    "login", "verify", "secure", "account", "update", "pay",
-    "otp", "upi", "wallet", "kyc", "refund", "reward", "parking",
-    "challan", "bill", "banking", "authenticate", "confirm"
+FEATURE_ORDER: List[str] = [
+    # host structure
+    "host_len", "n_labels", "subdomain_depth", "sld_len", "host_hyphens", "host_digits", "host_digit_ratio",
+    "host_entropy", "sld_entropy", "max_label_len", "is_ip", "is_punycode", "tld_abused", "tld_len",
+    "tld_restricted", "user_content_host", "sld_tokens", "sld_consonant_run", "sld_vowel_ratio",
+    "sld_digit_letter_mix", "host_hex_blob", "port_nonstandard", "host_keywords",
+    # brand impersonation
+    "brand_impersonation", "brand_in_sld", "brand_in_subdomain", "typosquat", "brand_min_dist",
+    "brand_jaro_winkler", "brand_in_path_only", "official_domain",
+    # path / query
+    "url_len", "path_len", "path_depth", "path_digit_ratio", "path_entropy", "has_query", "query_len",
+    "n_params", "path_keywords", "ext_dynamic", "ext_download", "ext_static", "long_token_len",
+    "redirect_param", "n_percent", "has_at", "double_slash_path", "path_dots",
 ]
 
-# Canonical feature order for ML models
-FEATURE_ORDER = [
-    "url_length", "host_length", "path_length", "dot_count", "hyphen_count",
-    "digit_count", "digit_ratio", "count_at", "count_question", "count_equal",
-    "count_amp", "count_percent", "count_underscore", "is_ip_host",
-    "non_standard_port", "num_subdomains", "host_entropy", "path_entropy",
-    "is_abused_tld", "is_punycode", "double_slash_redirect", "is_https",
-    "keyword_count", "brand_in_sub_path", "is_typosquat", "min_brand_dist",
-    "brand_jaro_winkler", "domain_age_days", "days_to_expiry", "tls_valid",
-    "whois_missing"
-]
+_VOWELS = set("aeiou")
+_CONSONANT_RUN = re.compile(r"[bcdfghjklmnpqrstvwxyz]+")
+_HEX_BLOB = re.compile(r"[0-9a-f]{10,}")
+_TOKEN_RUN = re.compile(r"[A-Za-z0-9_\-]{20,}")
+_REDIRECT_PARAM = re.compile(r"(?:^|[?&])(?:url|u|redirect|redirect_uri|next|goto|return|continue|dest|target)=(?:https?|//)", re.I)
+_EXT_DYNAMIC = {"php", "asp", "aspx", "jsp", "cgi", "php3", "php5", "pl", "cfm"}
+_EXT_DOWNLOAD = {"exe", "apk", "scr", "msi", "bat", "jar", "zip", "rar", "7z", "dmg", "iso", "ipa", "vbs", "ps1", "cmd", "com", "docm", "xlsm"}
+_EXT_STATIC = {"html", "htm", "xhtml", "shtml"}
 
 
-# Local blocklist cache (F10) for known malicious feeds / hard overrides
-LOCAL_BLOCKLIST_DOMAINS = {
-    "phishing-demo.local",
-    "secure-phonepe-refund.xyz",
-    "paytm-kyc-update.top",
-    "sbi-reward-claim.online",
-    "mumbai-challan-pay.click",
-    "citypark-fakepay.biz",
-    "openphish-sample.net",
-    "phishtank-test.org"
-}
+def ngram_text(url: str) -> str:
+    """Text fed to the character n-gram model: host (no www) + path/query. Scheme excluded."""
+    from qrshield.netutil import normalise_url
+    n = normalise_url(url) or ""
+    i = n.find("/")
+    host = hostname_of("http://" + n) if n else ""
+    return host + " " + (n[i:] if i >= 0 else "")
 
-# Local host cache for offline demo speed and zero-network resilience
-HOST_CACHE = {
-    "spit.ac.in": {
-        "domain_age_days": 7300,
-        "days_to_expiry": 800,
-        "dns_records_count": 6,
-        "mx_present": 1,
-        "tls_valid": 1,
-        "tls_age_days": 180,
-        "whois_missing": 0
-    },
-    "citypark.example": {
-        "domain_age_days": 2100,
-        "days_to_expiry": 365,
-        "dns_records_count": 4,
-        "mx_present": 1,
-        "tls_valid": 1,
-        "tls_age_days": 90,
-        "whois_missing": 0
-    },
-    "pay.citypark.example": {
-        "domain_age_days": 2100,
-        "days_to_expiry": 365,
-        "dns_records_count": 4,
-        "mx_present": 1,
-        "tls_valid": 1,
-        "tls_age_days": 90,
-        "whois_missing": 0
-    },
-    "secure-phonepe-refund.xyz": {
-        "domain_age_days": 3,
-        "days_to_expiry": 30,
-        "dns_records_count": 1,
-        "mx_present": 0,
-        "tls_valid": 0,
-        "tls_age_days": 2,
-        "whois_missing": 0
-    },
-    "paytm-kyc-update.top": {
-        "domain_age_days": 4,
-        "days_to_expiry": 45,
-        "dns_records_count": 1,
-        "mx_present": 0,
-        "tls_valid": 0,
-        "tls_age_days": 4,
-        "whois_missing": 0
-    }
-}
 
 def shannon_entropy(text: str) -> float:
-    """Calculates Shannon entropy of a string."""
     if not text:
         return 0.0
-    freq = {}
-    for c in text:
-        freq[c] = freq.get(c, 0) + 1
-    entropy = 0.0
-    for count in freq.values():
-        p = count / len(text)
-        entropy -= p * math.log2(p)
-    return round(entropy, 4)
+    counts: Dict[str, int] = {}
+    for ch in text:
+        counts[ch] = counts.get(ch, 0) + 1
+    n = len(text)
+    return -sum((c / n) * math.log2(c / n) for c in counts.values())
 
-def check_ip_host(netloc: str) -> bool:
-    """Checks if the host is an IPv4 or IPv6 address."""
-    host = netloc.split(":")[0]
-    # Check IPv4
-    ipv4_pattern = r'^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$'
-    if re.match(ipv4_pattern, host):
-        return True
-    # Check IPv6
-    if ":" in host:
-        return True
-    return False
 
-def query_host_features(domain: str, hostname: str, offline: bool = False) -> Dict[str, Any]:
-    """
-    Extracts host, whois, DNS, and TLS certificates safely.
-    Uses cached data when offline or for known test domains.
-    Never crashes on network error (F07).
-    """
-    if hostname in HOST_CACHE:
-        return dict(HOST_CACHE[hostname])
-    if domain in HOST_CACHE:
-        return dict(HOST_CACHE[domain])
-
-    if offline:
-        return {
-            "domain_age_days": 365,
-            "days_to_expiry": 180,
-            "dns_records_count": 2,
-            "mx_present": 0,
-            "tls_valid": 1,
-            "tls_age_days": 60,
-            "whois_missing": 1
-        }
-
-    # Live lookup with safety timeout
-    res = {
-        "domain_age_days": 0,
-        "days_to_expiry": 0,
-        "dns_records_count": 0,
-        "mx_present": 0,
-        "tls_valid": 0,
-        "tls_age_days": 0,
-        "whois_missing": 1
-    }
-
-    # 1. DNS records
+def idna_decode(host: str) -> str:
+    """Decode punycode labels to Unicode so homograph checks see the characters users see."""
     try:
-        addr = socket.getaddrinfo(hostname, 80)
-        res["dns_records_count"] = len(addr)
-    except Exception:
-        res["dns_records_count"] = 0
+        return host.encode("ascii").decode("idna")
+    except (UnicodeError, UnicodeDecodeError):
+        return host
 
-    # 2. TLS check
+
+@dataclass
+class FeatureResult:
+    vector: List[float]
+    named: Dict[str, float]
+    host: str = ""
+    parts: Optional[HostParts] = None
+    brand: Optional[B.BrandReport] = None
+    scheme: str = ""
+    path: str = ""
+    query: str = ""
+    malformed: bool = False
+    extra: Dict[str, Any] = field(default_factory=dict)
+
+
+def _empty(malformed: bool = True) -> FeatureResult:
+    named = {k: 0.0 for k in FEATURE_ORDER}
+    return FeatureResult([0.0] * len(FEATURE_ORDER), named, malformed=malformed)
+
+
+def extract_features(url: str) -> FeatureResult:
+    """Return the feature vector (in FEATURE_ORDER) plus context used to explain it."""
+    raw = (url or "").strip()
+    if not raw:
+        return _empty()
+    parsed = safe_urlparse(raw if "://" in raw else "http://" + raw)
+    if parsed is None:
+        return _empty()
+    host = hostname_of(raw if "://" in raw else "http://" + raw)
+    if not host:
+        return _empty()
     try:
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        with socket.create_connection((hostname, 443), timeout=1.5) as sock:
-            with ctx.wrap_socket(sock, server_hostname=hostname) as ssock:
-                cert = ssock.getpeercert(binary_form=False)
-                res["tls_valid"] = 1
-                if cert and "notBefore" in cert:
-                    not_before = datetime.strptime(cert["notBefore"], "%b %d %H:%M:%S %Y %Z")
-                    res["tls_age_days"] = max(0, (datetime.now() - not_before).days)
-    except Exception:
-        res["tls_valid"] = 0
+        port = parsed.port
+    except ValueError:
+        port = None
+    path, query = parsed.path or "", parsed.query or ""
 
-    # 3. WHOIS lookup
-    try:
-        w = whois.whois(domain)
-        creation = w.creation_date
-        expiration = w.expiration_date
+    host_norm = host[4:] if host.startswith("www.") else host
+    parts = split_host(host_norm)
+    parts_u = split_host(idna_decode(host_norm)) if "xn--" in host_norm else parts
+    labels = parts.labels
+    sld = parts.sld if not parts.is_ip else ""
+    sld_letters = re.sub(r"[^a-z]", "", sld)
 
-        if isinstance(creation, list):
-            creation = creation[0]
-        if isinstance(expiration, list):
-            expiration = expiration[0]
+    brand = B.check_brand(parts_u, path + ("?" + query if query else ""))
+    rest = path + ("?" + query if query else "")
+    rest_low = rest.lower()
 
-        now = datetime.now()
-        if creation:
-            res["domain_age_days"] = max(0, (now - creation).days)
-            res["whois_missing"] = 0
-        if expiration:
-            res["days_to_expiry"] = max(0, (expiration - now).days)
-    except Exception:
-        res["whois_missing"] = 1
+    letters_only = [c for c in sld_letters]
+    vowel_ratio = (sum(c in _VOWELS for c in letters_only) / len(letters_only)) if letters_only else 0.5
+    runs = _CONSONANT_RUN.findall(sld_letters)
+    last_seg = path.rsplit("/", 1)[-1]
+    ext = last_seg.rsplit(".", 1)[-1].lower() if "." in last_seg else ""
 
-    return res
+    segs = [s for s in path.split("/") if s]
+    digits_path = sum(c.isdigit() for c in path)
+    tlds = parts.suffix.split(".")[-1] if parts.suffix else ""
 
-def extract_url_features(url: str, offline: bool = False) -> Tuple[Dict[str, float], List[Dict[str, Any]], Dict[str, Any]]:
-    """
-    Extracts ~30 lexical, structural, typosquat, and host features.
-    Returns:
-      (feature_vector_dict, human_signals_list, meta_info)
-    """
-    if not url.startswith("http://") and not url.startswith("https://"):
-        parsed = urlparse("http://" + url)
-        is_https = 0.0
-    else:
-        parsed = urlparse(url)
-        is_https = 1.0 if parsed.scheme == "https" else 0.0
-
-    netloc = parsed.netloc.lower()
-    path = parsed.path
-    query = parsed.query
-    raw_url = url.strip()
-
-    # Domain extraction
-    ext = tldextract.extract(netloc)
-    subdomain = ext.subdomain.lower()
-    sld = ext.domain.lower()
-    tld = ext.suffix.lower()
-    registered_domain = f"{sld}.{tld}" if tld else sld
-    hostname = netloc.split(":")[0]
-
-    signals: List[Dict[str, Any]] = []
-
-    # 1. Lexical features
-    url_len = len(raw_url)
-    host_len = len(netloc)
-    path_len = len(path)
-    dot_count = raw_url.count(".")
-    hyphen_count = raw_url.count("-")
-    digit_count = sum(c.isdigit() for c in raw_url)
-    digit_ratio = digit_count / max(url_len, 1)
-
-    count_at = raw_url.count("@")
-    count_question = raw_url.count("?")
-    count_equal = raw_url.count("=")
-    count_amp = raw_url.count("&")
-    count_percent = raw_url.count("%")
-    count_underscore = raw_url.count("_")
-
-    is_ip = 1.0 if check_ip_host(netloc) else 0.0
-    if is_ip:
-        signals.append({
-            "name": "ip_address_host",
-            "value": netloc,
-            "text": f"URL host uses raw IP address '{netloc}' instead of domain name."
-        })
-
-    # Non-standard port
-    non_standard_port = 0.0
-    if ":" in netloc:
-        port_part = netloc.split(":")[-1]
-        if port_part.isdigit() and port_part not in ("80", "443"):
-            non_standard_port = 1.0
-            signals.append({
-                "name": "non_standard_port",
-                "value": port_part,
-                "text": f"URL specifies abnormal port :{port_part}."
-            })
-
-    subdomain_parts = [p for p in subdomain.split(".") if p]
-    num_subdomains = len(subdomain_parts)
-
-    host_entropy = shannon_entropy(netloc)
-    path_entropy = shannon_entropy(path)
-
-    # Abused TLD
-    is_abused_tld = 1.0 if tld in ABUSED_TLDS else 0.0
-    if is_abused_tld:
-        signals.append({
-            "name": "abused_tld",
-            "value": tld,
-            "text": f"High-risk top-level domain '.{tld}' often leveraged in phishing campaigns."
-        })
-
-    # Punycode / IDN
-    is_punycode = 1.0 if ("xn--" in netloc or "xn--" in raw_url) else 0.0
-    if is_punycode:
-        signals.append({
-            "name": "punycode_idn",
-            "value": True,
-            "text": "Punycode (xn--) internationalized domain encoding detected."
-        })
-
-    # Double slash in path
-    has_double_slash_redirect = 1.0 if ("//" in path) else 0.0
-    if has_double_slash_redirect:
-        signals.append({
-            "name": "double_slash_redirect",
-            "value": True,
-            "text": "Embedded double-slash (//) found in path suggesting open redirect."
-        })
-
-    # 2. Keywords
-    keyword_count = sum(1 for kw in SUSPICIOUS_KEYWORDS if kw in raw_url.lower())
-    if keyword_count >= 2:
-        signals.append({
-            "name": "phishing_keywords",
-            "value": keyword_count,
-            "text": f"Multiple sensitive authentication keywords found in link."
-        })
-
-    # Brand in subdomain/path but not registered domain
-    sub_path_brand_warning = check_brand_in_subdomain_or_path(subdomain, path, registered_domain)
-    brand_sub_path_flag = 1.0 if sub_path_brand_warning else 0.0
-    if sub_path_brand_warning:
-        signals.append({
-            "name": "brand_in_subdomain_or_path",
-            "value": True,
-            "text": sub_path_brand_warning
-        })
-
-    # 3. Typosquat analysis
-    typosquat_res = check_brand_typosquat(sld)
-    is_typosquat = 1.0 if typosquat_res["is_typosquat"] else 0.0
-    min_levenshtein = float(typosquat_res["min_levenshtein"])
-    jaro_winkler = float(typosquat_res["jaro_winkler"])
-    if typosquat_res["is_typosquat"]:
-        signals.append({
-            "name": "typosquat_domain",
-            "value": typosquat_res["matched_brand"],
-            "text": typosquat_res["warning"] or f"Domain imitates '{typosquat_res['matched_brand']}'"
-        })
-
-    # 4. Host features
-    host_info = query_host_features(registered_domain, hostname, offline=offline)
-    domain_age = float(host_info.get("domain_age_days", 0))
-    days_to_exp = float(host_info.get("days_to_expiry", 0))
-    tls_valid = float(host_info.get("tls_valid", 0))
-    whois_missing = float(host_info.get("whois_missing", 0))
-
-    if domain_age > 0 and domain_age < 14:
-        signals.append({
-            "name": "newly_registered_domain",
-            "value": domain_age,
-            "text": f"Domain was registered only {int(domain_age)} days ago."
-        })
-    elif domain_age == 0 and whois_missing == 0:
-        signals.append({
-            "name": "brand_new_domain",
-            "value": 0,
-            "text": "Domain was registered within the last 24 hours."
-        })
-
-    if is_https == 0.0:
-        signals.append({
-            "name": "insecure_http",
-            "value": False,
-            "text": "Insecure HTTP scheme without TLS encryption."
-        })
-
-    # 5. Check local blocklist hard override (F10)
-    is_blocklisted = (
-        hostname in LOCAL_BLOCKLIST_DOMAINS or
-        registered_domain in LOCAL_BLOCKLIST_DOMAINS or
-        any(bl in raw_url for bl in LOCAL_BLOCKLIST_DOMAINS)
-    )
-    if is_blocklisted:
-        signals.append({
-            "name": "blocklist_match",
-            "value": True,
-            "text": "Domain is flagged on local intelligence blocklist cache."
-        })
-
-    # Feature vector (~30 numeric features)
-    features = {
-        "url_length": float(url_len),
-        "host_length": float(host_len),
-        "path_length": float(path_len),
-        "dot_count": float(dot_count),
-        "hyphen_count": float(hyphen_count),
-        "digit_count": float(digit_count),
-        "digit_ratio": round(digit_ratio, 4),
-        "count_at": float(count_at),
-        "count_question": float(count_question),
-        "count_equal": float(count_equal),
-        "count_amp": float(count_amp),
-        "count_percent": float(count_percent),
-        "count_underscore": float(count_underscore),
-        "is_ip_host": is_ip,
-        "non_standard_port": non_standard_port,
-        "num_subdomains": float(num_subdomains),
-        "host_entropy": host_entropy,
-        "path_entropy": path_entropy,
-        "is_abused_tld": is_abused_tld,
-        "is_punycode": is_punycode,
-        "double_slash_redirect": has_double_slash_redirect,
-        "is_https": is_https,
-        "keyword_count": float(keyword_count),
-        "brand_in_sub_path": brand_sub_path_flag,
-        "is_typosquat": is_typosquat,
-        "min_brand_dist": min_levenshtein,
-        "brand_jaro_winkler": jaro_winkler,
-        "domain_age_days": domain_age,
-        "days_to_expiry": days_to_exp,
-        "tls_valid": tls_valid,
-        "whois_missing": whois_missing
+    named: Dict[str, float] = {
+        "host_len": float(len(host_norm)),
+        "n_labels": float(len(labels)),
+        "subdomain_depth": float(len([p for p in parts.subdomain.split(".") if p])),
+        "sld_len": float(len(sld)),
+        "host_hyphens": float(host_norm.count("-")),
+        "host_digits": float(sum(c.isdigit() for c in host_norm)),
+        "host_digit_ratio": sum(c.isdigit() for c in host_norm) / max(len(host_norm), 1),
+        "host_entropy": shannon_entropy(host_norm),
+        "sld_entropy": shannon_entropy(sld),
+        "max_label_len": float(max((len(p) for p in labels), default=0)),
+        "is_ip": 1.0 if parts.is_ip else 0.0,
+        "is_punycode": 1.0 if any(p.startswith("xn--") for p in labels) else 0.0,
+        "tld_abused": 1.0 if tlds in B.ABUSED_TLDS else 0.0,
+        "tld_len": float(len(tlds)),
+        "tld_restricted": 1.0 if B.is_restricted_suffix(parts.suffix) else 0.0,
+        "user_content_host": 1.0 if B.is_user_content_host(parts.registered, host_norm) else 0.0,
+        "sld_tokens": float(len([t for t in re.split(r"[-_]", sld) if t])),
+        "sld_consonant_run": float(max((len(r) for r in runs), default=0)),
+        "sld_vowel_ratio": vowel_ratio,
+        "sld_digit_letter_mix": 1.0 if (any(c.isdigit() for c in sld) and any(c.isalpha() for c in sld)) else 0.0,
+        "host_hex_blob": 1.0 if _HEX_BLOB.search(host_norm) else 0.0,
+        "port_nonstandard": 1.0 if (port is not None and port not in (80, 443)) else 0.0,
+        "host_keywords": float(sum(1 for k in B.PHISH_KEYWORDS if k in host_norm)),
+        "brand_impersonation": 1.0 if brand.impersonation else 0.0,
+        "brand_in_sld": 1.0 if (brand.impersonation and brand.where in ("sld", "typo")) else 0.0,
+        "brand_in_subdomain": 1.0 if (brand.impersonation and brand.where == "subdomain") else 0.0,
+        "typosquat": 1.0 if brand.typosquat else 0.0,
+        "brand_min_dist": float(brand.min_norm_dist),
+        "brand_jaro_winkler": float(brand.jaro_winkler),
+        "brand_in_path_only": 1.0 if brand.brand_in_path_only else 0.0,
+        "official_domain": 1.0 if brand.official else 0.0,
+        "url_len": float(len(host_norm) + len(rest)),
+        "path_len": float(len(path)),
+        "path_depth": float(len(segs)),
+        "path_digit_ratio": digits_path / max(len(path), 1),
+        "path_entropy": shannon_entropy(path),
+        "has_query": 1.0 if query else 0.0,
+        "query_len": float(len(query)),
+        "n_params": float(query.count("&") + 1 if query else 0),
+        "path_keywords": float(sum(1 for k in B.PHISH_KEYWORDS if k in rest_low)),
+        "ext_dynamic": 1.0 if ext in _EXT_DYNAMIC else 0.0,
+        "ext_download": 1.0 if ext in _EXT_DOWNLOAD else 0.0,
+        "ext_static": 1.0 if ext in _EXT_STATIC else 0.0,
+        "long_token_len": float(max((len(m) for m in _TOKEN_RUN.findall(rest)), default=0)),
+        "redirect_param": 1.0 if _REDIRECT_PARAM.search("?" + query if query else "") else 0.0,
+        "n_percent": float(rest.count("%")),
+        "has_at": 1.0 if "@" in raw.split("//", 1)[-1].split("/", 1)[0] else 0.0,
+        "double_slash_path": 1.0 if "//" in path else 0.0,
+        "path_dots": float(path.count(".")),
     }
-
-    meta = {
-        "registered_domain": registered_domain,
-        "hostname": hostname,
-        "is_blocklisted": is_blocklisted,
-        "typosquat_info": typosquat_res
-    }
-
-    return features, signals, meta
+    vector = [float(named[k]) for k in FEATURE_ORDER]
+    return FeatureResult(vector, named, host=host_norm, parts=parts, brand=brand,
+                         scheme=(parsed.scheme or "").lower() if "://" in raw else "", path=path, query=query)
