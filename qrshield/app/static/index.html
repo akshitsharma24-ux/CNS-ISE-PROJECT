@@ -1,308 +1,301 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>QRshield - Three-Layer Quishing & Physical Tamper Detector</title>
-  <link rel="stylesheet" href="style.css">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
+  <meta name="description" content="QRshield checks a QR code before you open it: link analysis, a pasted-sticker check and cryptographic signature verification.">
+  <title>QRshield - scan, verify, then decide</title>
+  <link rel="icon" href="img/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
-  <header>
-    <div class="container header-inner">
-      <div class="brand">
-        <div class="brand-logo">🛡️</div>
-        <div class="brand-text">
-          <h1>QRshield</h1>
-          <p>Three-Layer Quishing Detector | Team Black Sparrow (SPIT Mumbai)</p>
-        </div>
-      </div>
-      <nav class="nav-tabs">
-        <button class="nav-btn active" onclick="switchTab('scanner')">Scan & Verify</button>
-        <button class="nav-btn" onclick="switchTab('issuer')">Issuer PKI Portal</button>
-        <button class="nav-btn" onclick="switchTab('admin')">Admin Queue</button>
+  <!-- icon sprite (inline so the strict CSP needs no external requests) -->
+  <svg class="sprite" aria-hidden="true" focusable="false">
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5l-8-3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="m8.5 12 2.5 2.5 4.5-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-warn" viewBox="0 0 24 24"><path d="M12 3 2 20h20L12 3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M12 10v4m0 3v.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-block" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m6 6 12 12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-camera" viewBox="0 0 24 24"><path d="M4 8h3l1.5-2h7L17 8h3v11H4V8z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><circle cx="12" cy="13" r="3.4" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V5m0 0-4 4m4-4 4 4M5 15v4h14v-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m11 12 8-8m-3 3 2 2m-4 1 2 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="2.8" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-flag" viewBox="0 0 24 24"><path d="M5 21V4m0 0h11l-2 4 2 4H5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3M5 5l2 2m10 10 2 2M19 5l-2 2M7 17l-2 2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 11v6m0-9v.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+  </svg>
+
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="topbar">
+    <div class="wrap topbar-inner">
+      <a class="brand" href="#/scan" aria-label="QRshield home">
+        <span class="brand-mark"><svg class="icon"><use href="#i-shield"/></svg></span>
+        <span class="brand-text"><strong>QRshield</strong><small>scan, verify, then decide</small></span>
+      </a>
+      <nav class="nav" aria-label="Main">
+        <a href="#/scan" data-nav="scan">Scan</a>
+        <a href="#/issuer" data-nav="issuer">Issuer portal</a>
+        <a href="#/admin" data-nav="admin">Admin</a>
+        <a href="#/how" data-nav="how">How it works</a>
       </nav>
+      <div class="topbar-tools">
+        <span id="model-chip" class="chip" title="Active model versions">models</span>
+        <button id="theme-toggle" class="icon-btn" type="button" aria-label="Toggle light/dark theme"><svg class="icon"><use href="#i-sun"/></svg></button>
+      </div>
     </div>
   </header>
 
-  <main class="container">
-    <!-- Live Demo Quick-Test Bar (Section 13) -->
-    <section class="scenario-bar">
-      <div class="scenario-title">⚡ Live Demo Script Scenarios (Section 13)</div>
-      <div class="scenario-btns">
-        <button class="scenario-btn" onclick="loadDemoScenario(1)">1. Clean Unsigned (SPIT)</button>
-        <button class="scenario-btn" onclick="loadDemoScenario(2)">2. Phishing Zero-Day (PhonePe)</button>
-        <button class="scenario-btn" onclick="loadDemoScenario(3)">3. Signed City Parking (Valid PKI)</button>
-        <button class="scenario-btn" onclick="loadDemoScenario(4)">4. Physical Sticker Swap (Tamper CV)</button>
-        <button class="scenario-btn" onclick="loadDemoScenario(5)">5. Forged Token (Crypto Invalid)</button>
-        <button class="scenario-btn" onclick="loadDemoScenario(6)">6. Feedback Loop (Report & Retrain)</button>
+  <main id="main" class="wrap">
+
+    <!-- ===================================================== SCAN -->
+    <section id="view-scan" class="view" data-view="scan">
+      <div class="scan-grid">
+        <div class="stack">
+          <div class="card" id="input-card">
+            <div class="card-head">
+              <h2>Scan a QR code</h2>
+              <span id="scan-status" class="muted small" role="status">Ready</span>
+            </div>
+
+            <div class="seg" role="tablist" aria-label="Input method">
+              <button class="seg-btn is-active" role="tab" data-source="photo" aria-selected="true"><svg class="icon"><use href="#i-upload"/></svg>Photo</button>
+              <button class="seg-btn" role="tab" data-source="camera" aria-selected="false"><svg class="icon"><use href="#i-camera"/></svg>Live camera</button>
+              <button class="seg-btn" role="tab" data-source="link" aria-selected="false"><svg class="icon"><use href="#i-link"/></svg>Type a link</button>
+            </div>
+
+            <div id="source-photo" class="source">
+              <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Choose, drop or paste a photo of a QR code">
+                <svg class="icon xl"><use href="#i-camera"/></svg>
+                <p><strong>Drop a photo here</strong>, paste it (Ctrl+V), or use a button below</p>
+                <p class="muted small">Include the area <em>around</em> the code - that is where stickers show up.</p>
+                <div class="btn-row center">
+                  <label class="btn secondary">Take photo<input id="file-camera" type="file" accept="image/*" capture="environment" hidden></label>
+                  <label class="btn secondary">Choose file<input id="file-gallery" type="file" accept="image/*" hidden></label>
+                </div>
+              </div>
+            </div>
+
+            <div id="source-camera" class="source" hidden>
+              <div id="camera-notice" class="notice warn" hidden></div>
+              <div class="camera-box">
+                <video id="camera-video" playsinline muted></video>
+                <div class="camera-guide" aria-hidden="true"><span>Fit the code AND the area around it</span></div>
+              </div>
+              <div class="btn-row">
+                <button id="camera-start" class="btn secondary" type="button">Start camera</button>
+                <button id="camera-capture" class="btn primary" type="button" disabled>Capture</button>
+                <button id="camera-stop" class="btn ghost" type="button" disabled>Stop</button>
+              </div>
+            </div>
+
+            <div id="source-link" class="source" hidden>
+              <label class="field">
+                <span>Link or payload to check (no photo needed)</span>
+                <input id="link-input" class="input mono" type="text" autocomplete="off" spellcheck="false" maxlength="4096" placeholder="https://example.com/pay   or   upi://pay?pa=...">
+              </label>
+              <p class="muted small">This runs the link analysis and signature check only. The sticker check needs a photo.</p>
+              <div class="btn-row"><button id="link-check" class="btn primary" type="button">Check link</button></div>
+            </div>
+
+            <figure id="preview" class="preview" hidden>
+              <img id="preview-img" alt="Selected photo of a QR code">
+              <figcaption class="muted small"><span id="preview-name"></span> <button id="preview-clear" class="link-btn" type="button">remove</button></figcaption>
+            </figure>
+
+            <div id="quality-hints" class="notice warn" role="status" hidden></div>
+
+            <div id="second-photo" class="notice info" hidden>
+              <strong>Second photo recommended</strong>
+              <p class="small">The visual check is borderline. Take another photo from about 30&deg; to the side - highlights move differently on a pasted sticker.</p>
+              <div class="btn-row">
+                <label class="btn secondary">Take second photo<input id="file-second" type="file" accept="image/*" capture="environment" hidden></label>
+                <span id="second-name" class="muted small"></span>
+              </div>
+            </div>
+
+            <div class="btn-row end">
+              <button id="scan-btn" class="btn primary lg" type="button" disabled><svg class="icon"><use href="#i-shield"/></svg>Scan &amp; verify</button>
+            </div>
+          </div>
+
+          <div class="card" id="demo-card">
+            <div class="card-head"><h2>Demo scenarios</h2><span class="muted small">simulated photos &middot; real signatures</span></div>
+            <div id="scenario-list" class="scenarios"></div>
+          </div>
+        </div>
+
+        <div class="stack">
+          <div class="card result-card" id="result-card" aria-live="polite">
+            <div id="result-empty" class="empty">
+              <svg class="icon xl"><use href="#i-shield"/></svg>
+              <h3>Nothing scanned yet</h3>
+              <p class="muted">Scan a code to see three independent checks &mdash; the link, the physical sticker, and the digital signature &mdash; fused into one verdict <em>before</em> anything opens.</p>
+            </div>
+            <div id="result-body" hidden></div>
+          </div>
+
+          <div class="card" id="history-card" hidden>
+            <div class="card-head"><h2>Recent scans</h2><button id="history-clear" class="link-btn" type="button">clear</button></div>
+            <ul id="history-list" class="history"></ul>
+            <p class="muted small">Stored only in this browser. Photos are never kept.</p>
+          </div>
+        </div>
       </div>
     </section>
 
-    <!-- Tab 1: Scanner View -->
-    <div id="tab-scanner" class="tab-pane active">
-      <div class="main-grid">
-        <!-- Left: Upload & Camera Controls -->
-        <div class="card">
-          <div class="card-header">
-            <h2>Scan QR Code</h2>
-            <span id="scan-status" style="font-size: 0.8rem; color: var(--text-muted);">Ready</span>
-          </div>
-
-          <div class="capture-box" id="drop-zone" onclick="document.getElementById('file-input').click()">
-            <div style="font-size: 2.2rem; margin-bottom: 8px;">📷</div>
-            <p style="font-weight: 600;">Upload photo, drag & drop, or paste (Ctrl+V)</p>
-            <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;">Click to browse JPG, PNG, WEBP or capture from camera</p>
-            <input type="file" id="file-input" accept="image/*" capture="environment" onchange="handleFileSelect(event)">
-          </div>
-
-          <div class="preview-container" id="preview-box">
-            <img id="img-preview" src="" alt="Scan Preview">
-          </div>
-
-          <!-- Multi-angle second photo prompt (F21) -->
-          <div id="second-photo-box" style="display: none; margin-top: 14px; padding: 12px; background: var(--bg-card); border: 1px dashed var(--warn-border); border-radius: 8px;">
-            <p style="font-size: 0.82rem; color: #fbbf24; font-weight: 600;">📐 Inconclusive: Take 2nd Photo from ~30° angle</p>
-            <input type="file" id="file-input2" accept="image/*" capture="environment" style="margin-top: 8px; font-size: 0.8rem;" onchange="handleSecondFileSelect(event)">
-          </div>
-
-          <div class="webcam-container" id="webcam-box">
-            <video id="webcam" autoplay playsinline></video>
-          </div>
-
-          <div class="btn-group">
-            <button class="btn btn-secondary" id="webcam-btn" onclick="toggleWebcam()">🎥 Webcam</button>
-            <button class="btn btn-primary" id="scan-btn" onclick="performScan()" disabled>⚡ Scan & Analyze</button>
-          </div>
-
-          <div id="quality-hints" style="margin-top: 14px; font-size: 0.8rem; color: #fbbf24; display: none;"></div>
-
-          <!-- Custom URL / UPI Generator & Tester -->
-          <div style="margin-top: 16px; border-top: 1px solid var(--border-color); padding-top: 12px;">
-            <div style="font-size: 0.85rem; font-weight: 600; color: var(--accent-cyan); margin-bottom: 6px;">
-              ✨ Test Any Custom URL / UPI Directly
+    <!-- ===================================================== ISSUER PORTAL -->
+    <section id="view-issuer" class="view" data-view="issuer" hidden>
+      <div id="issuer-gate" class="card gate" hidden></div>
+      <div id="issuer-body" hidden>
+        <div class="issuer-grid">
+          <div class="stack">
+            <div class="card">
+              <div class="card-head"><h2>Generate a signed QR</h2><span class="chip">Ed25519</span></div>
+              <p class="muted small">A signed QR is an ordinary link with one extra parameter, so any phone camera still opens it. QRshield also verifies the signature, the certificate chain and the domain binding.</p>
+              <form id="sign-form" class="form" autocomplete="off">
+                <label class="field"><span>Business</span><select id="sign-issuer" class="input"></select></label>
+                <label class="field"><span>Link to certify</span><input id="sign-url" class="input mono" type="url" required maxlength="1500" placeholder="https://pay.citypark.example/m/42"></label>
+                <div class="two">
+                  <label class="field"><span>Location / terminal id</span><input id="sign-loc" class="input" maxlength="48" value="andheri-west-meter-04"></label>
+                  <label class="field"><span>Valid for (hours, 0 = never expires)</span><input id="sign-hours" class="input" type="number" min="0" max="43800" value="48"></label>
+                </div>
+                <div class="btn-row end"><button class="btn primary" type="submit"><svg class="icon"><use href="#i-key"/></svg>Sign &amp; generate</button></div>
+              </form>
+              <div id="sign-result" class="sign-result" hidden></div>
             </div>
-            <div style="display: flex; gap: 8px;">
-              <input type="text" id="custom-qr-input" class="form-control" style="font-size: 0.82rem; padding: 6px 10px;" placeholder="e.g. https://phishing-site.xyz or upi://pay?..." onkeydown="if(event.key==='Enter') generateAndScanCustomQR()">
-              <button class="btn btn-secondary" style="font-size: 0.78rem; white-space: nowrap; padding: 6px 12px;" onclick="generateAndScanCustomQR()">Generate & Scan</button>
+            <div class="card">
+              <div class="card-head"><h2>Trust chain</h2></div>
+              <ol class="chain">
+                <li><strong>Registry root key</strong><span>Ed25519 key pinned in the verifier. Signs certificates and the revocation list.</span><code id="root-key" class="mono small"></code></li>
+                <li><strong>Issuer certificate</strong><span>Root-signed: issuer id, <em>bound domain</em>, issuer public key, validity.</span></li>
+                <li><strong>QR token</strong><span>Issuer-signed over <code>"QRSHIELD-v1" | canonical URL | issuer | key | location | issued | expires</code>.</span></li>
+              </ol>
             </div>
           </div>
-        </div>
-
-        <!-- Right: Layered Verdict Card -->
-        <div class="card" id="result-card">
-          <div class="card-header">
-            <h2>Three-Layer Security Verdict</h2>
-            <span id="scan-latency" style="font-size: 0.75rem; color: var(--text-muted);"></span>
-          </div>
-
-          <!-- Initial empty state -->
-          <div id="verdict-placeholder" style="text-align: center; padding: 50px 20px; color: var(--text-muted);">
-            <div style="font-size: 2.5rem; margin-bottom: 10px;">🔍</div>
-            <p>Upload or capture a QR code to run URL ML, CV Physical Tamper, and Ed25519 PKI verification.</p>
-          </div>
-
-          <!-- Active Verdict Details (Hidden by default) -->
-          <div id="verdict-content" style="display: none;">
-            <div id="verdict-banner" class="verdict-banner SAFE">
-              <div class="verdict-title">
-                <span id="verdict-icon" style="font-size: 1.8rem;">🛡️</span>
-                <div>
-                  <h3 id="verdict-text">SAFE</h3>
-                  <div id="certified-badge" class="certified-badge" style="display: none;">
-                    ✓ QRSHIELD CERTIFIED
+          <div class="stack">
+            <div class="card">
+              <div class="card-head"><h2>Registered businesses</h2><button id="issuer-refresh" class="link-btn" type="button">refresh</button></div>
+              <div class="table-wrap"><table class="table" id="issuer-table"><thead><tr><th>Business</th><th>Bound domain</th><th>Status</th><th></th></tr></thead><tbody></tbody></table></div>
+              <details class="more"><summary>Register a new business</summary>
+                <form id="register-form" class="form" autocomplete="off">
+                  <div class="two">
+                    <label class="field"><span>Issuer id</span><input id="reg-id" class="input" required minlength="2" maxlength="63" pattern="[a-z0-9][a-z0-9\-]+" placeholder="cafe-andheri"></label>
+                    <label class="field"><span>Name</span><input id="reg-name" class="input" required minlength="2" maxlength="128" placeholder="Chai Point Andheri"></label>
                   </div>
-                </div>
-              </div>
-              <div style="text-align: right;">
-                <div style="font-size: 0.75rem; color: var(--text-muted);">AGGREGATE RISK</div>
-                <div id="verdict-risk" style="font-size: 1.25rem; font-weight: 800;">0.05</div>
-              </div>
+                  <label class="field"><span>Domain it may certify (not a bare suffix like .com)</span><input id="reg-domain" class="input mono" required maxlength="253" placeholder="chaipoint.example"></label>
+                  <div class="btn-row end"><button class="btn secondary" type="submit">Register &amp; issue certificate</button></div>
+                </form>
+              </details>
             </div>
-
-            <!-- Plain-Language Reasons (F31) -->
-            <ul id="reasons-list" class="reasons-list"></ul>
-
-            <!-- Three Layer Sub-Cards -->
-            <div class="layer-cards">
-              <!-- M1: URL ML -->
-              <div class="layer-card">
-                <div class="layer-top">
-                  <span class="layer-name">M1: URL / Payload ML</span>
-                  <span id="url-score-pill" class="layer-score-pill">Risk: 0.05</span>
-                </div>
-                <div style="font-size: 0.8rem; color: var(--text-muted);">
-                  Payload Type: <strong id="url-type-badge">url</strong>
-                </div>
-                <ul id="url-signals" class="signals-list"></ul>
-              </div>
-
-              <!-- M2: Visual Tamper CV -->
-              <div class="layer-card">
-                <div class="layer-top">
-                  <span class="layer-name">M2: Visual Tamper (CV)</span>
-                  <span id="cv-score-pill" class="layer-score-pill">Tamper: 0.10</span>
-                </div>
-                <div style="font-size: 0.8rem; color: var(--text-muted);">
-                  Status: <strong id="cv-status-badge">ok</strong>
-                </div>
-                <ul id="cv-signals" class="signals-list"></ul>
-                <!-- Grad-CAM Heatmap overlay -->
-                <div class="heatmap-box" id="heatmap-container" style="display: none;">
-                  <p style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 4px;">Grad-CAM Perimeter Saliency Map:</p>
-                  <img id="heatmap-img" src="" alt="Grad-CAM Saliency">
-                </div>
-              </div>
-
-              <!-- M3: Crypto PKI -->
-              <div class="layer-card">
-                <div class="layer-top">
-                  <span class="layer-name">M3: Ed25519 PKI Signature</span>
-                  <span id="crypto-status-pill" class="layer-score-pill">Status: None</span>
-                </div>
-                <div id="crypto-details" style="font-size: 0.82rem; margin-top: 4px; color: var(--text-muted);">
-                  Unsigned QR code (falls to URL & CV checks).
-                </div>
-              </div>
-            </div>
-
-            <!-- Safe Interaction Link Box (F33) -->
-            <div class="safe-link-bar">
-              <div style="font-size: 0.78rem; text-transform: uppercase; color: var(--text-muted); font-weight: 700;">
-                Destination Link (Never auto-opened)
-              </div>
-              <div class="payload-display" id="decoded-payload"></div>
-
-              <div id="safety-confirm-box" style="display: none; margin: 8px 0; font-size: 0.82rem;">
-                <label style="color: #fbbf24; cursor: pointer;">
-                  <input type="checkbox" id="confirm-open-checkbox"> I understand the risk and wish to proceed
-                </label>
-              </div>
-
-              <div class="action-row">
-                <button class="btn btn-secondary" onclick="openReportModal()" style="font-size: 0.8rem;">
-                  🚩 Report Feedback
-                </button>
-                <button class="btn btn-primary" id="open-link-btn" onclick="handleOpenLink()" style="font-size: 0.8rem;">
-                  🔗 Open Link
-                </button>
-              </div>
+            <div class="card">
+              <div class="card-head"><h2>Revocation list (CRL)</h2><span id="crl-version" class="chip"></span></div>
+              <p class="muted small">Root-signed and versioned. Verifiers refuse older versions (rollback protection).</p>
+              <ul id="crl-list" class="plain"></ul>
+              <div class="btn-row"><button id="demo-reset" class="btn ghost" type="button">Restore all issuers (reset demo)</button></div>
             </div>
           </div>
         </div>
       </div>
-    </div>
+    </section>
 
-    <!-- Tab 2: Issuer PKI Portal (F27) -->
-    <div id="tab-issuer" class="tab-pane">
-      <div class="card" style="max-width: 650px; margin: 0 auto;">
-        <div class="card-header">
-          <h2>Issuer PKI Portal (F27)</h2>
-          <span style="font-size: 0.8rem; color: var(--accent-cyan);">Ed25519 Signing Service</span>
-        </div>
-        <p style="font-size: 0.84rem; color: var(--text-muted); margin-bottom: 16px;">
-          Generate provably authentic, domain-bound QR codes with Ed25519 signatures embedded in URL parameters.
-        </p>
-
-        <div class="form-group">
-          <label>Select Registered Business</label>
-          <select id="issuer-select" class="form-control" onchange="onIssuerSelected()">
-            <option value="citypark-01">Mumbai Smart City Parking (pay.citypark.example)</option>
-            <option value="spit-admit">SPIT Admissions Authority (spit.ac.in)</option>
-          </select>
-        </div>
-
-        <div class="form-group">
-          <label>Target Domain-Bound URL</label>
-          <input type="text" id="issuer-url" class="form-control" value="https://pay.citypark.example/m/42">
-        </div>
-
-        <div class="form-group">
-          <label>Location ID / Terminal</label>
-          <input type="text" id="issuer-loc" class="form-control" value="andheri-west-counter-04">
-        </div>
-
-        <div class="form-group">
-          <label>Validity (Hours)</label>
-          <input type="number" id="issuer-validity" class="form-control" value="48">
-        </div>
-
-        <div class="btn-group">
-          <button class="btn btn-primary" onclick="generateSignedQR()">🔏 Generate Signed QR</button>
-          <button class="btn btn-secondary" style="color: #f87171;" onclick="revokeCurrentIssuer()">⚠️ Revoke Issuer Key</button>
-        </div>
-
-        <div id="signed-qr-result" style="display: none; margin-top: 20px; text-align: center; border-top: 1px solid var(--border-color); padding-top: 16px;">
-          <h4 style="font-size: 0.95rem; margin-bottom: 8px;">Provably Authentic Signed QR Code</h4>
-          <img id="signed-qr-img" src="" alt="Signed QR" style="max-width: 220px; border-radius: 8px; border: 1px solid var(--border-color);">
-          <div style="margin-top: 10px;">
-            <a id="download-qr-btn" class="btn btn-secondary" download="signed_qr.png" href="" style="display: inline-flex; width: auto;">
-              ⬇️ Download PNG
-            </a>
+    <!-- ===================================================== ADMIN -->
+    <section id="view-admin" class="view" data-view="admin" hidden>
+      <div id="admin-gate" class="card gate" hidden></div>
+      <div id="admin-body" hidden>
+        <div id="stat-row" class="stats"></div>
+        <div class="admin-grid">
+          <div class="card">
+            <div class="card-head"><h2>Report review queue</h2>
+              <div class="seg small-seg" id="report-filter" role="tablist" aria-label="Filter reports">
+                <button class="seg-btn is-active" data-status="pending">Pending</button>
+                <button class="seg-btn" data-status="approved">Approved</button>
+                <button class="seg-btn" data-status="rejected">Rejected</button>
+              </div>
+            </div>
+            <p class="muted small">Only reports a person approves can ever reach the training set. This human gate, plus the benchmark gate below, is the defence against poisoning.</p>
+            <div class="table-wrap"><table class="table" id="report-table"><thead><tr><th>Reported payload</th><th>Label</th><th>At report</th><th>Note</th><th></th></tr></thead><tbody></tbody></table></div>
           </div>
-          <div class="payload-display" id="signed-url-display" style="margin-top: 12px; text-align: left;"></div>
+          <div class="stack">
+            <div class="card">
+              <div class="card-head"><h2>URL model</h2><span id="model-active" class="chip"></span></div>
+              <p class="muted small">Retraining uses the bundled base corpus plus approved reports, then must beat the active model on a fixed benchmark and canary links to be promoted.</p>
+              <div class="btn-row"><button id="retrain-btn" class="btn primary" type="button">Retrain from approved reports</button><span id="retrain-status" class="muted small" role="status"></span></div>
+              <div class="table-wrap"><table class="table compact" id="model-table"><thead><tr><th>Version</th><th>Status</th><th>AUC</th><th>FPR</th><th>Note</th></tr></thead><tbody></tbody></table></div>
+            </div>
+            <div class="card">
+              <div class="card-head"><h2>Audit trail</h2></div>
+              <ul id="audit-list" class="audit"></ul>
+            </div>
+          </div>
         </div>
       </div>
-    </div>
+    </section>
 
-    <!-- Tab 3: Admin Review Queue (F34, F35) -->
-    <div id="tab-admin" class="tab-pane">
-      <div class="card">
-        <div class="card-header">
-          <h2>Admin Feedback Queue & Continuous Learning (F34, F35)</h2>
-          <button class="btn btn-secondary" onclick="loadAdminReports()" style="font-size: 0.8rem;">🔄 Refresh</button>
+    <!-- ===================================================== HOW IT WORKS -->
+    <section id="view-how" class="view" data-view="how" hidden>
+      <div class="how-grid">
+        <div class="card prose">
+          <h2>Why scanning a QR code is risky</h2>
+          <p>A QR code is just a link you cannot read. Attackers use that two ways: <strong>new look-alike links</strong> that no blocklist knows yet, and <strong>stickers pasted over real codes</strong> at parking meters, menus and payment stands. A URL checker cannot see a sticker; a camera check cannot read a link; and signed codes only help businesses that sign.</p>
+          <h3>Three independent layers</h3>
+          <div class="layers">
+            <div class="layer"><span class="badge m1">M1</span><div><strong>Link analysis</strong><p>A calibrated model over lexical features and character patterns, brand-impersonation rules (official domains vs look-alikes), UPI payee checks, and an SSRF-safe look at shorteners.</p></div></div>
+            <div class="layer"><span class="badge m2">M2</span><div><strong>Sticker check</strong><p>The photo is rectified onto the QR plane and measured: straight sticker borders, shadow, paper colour, grain, highlights, and original-code fragments peeking out.</p></div></div>
+            <div class="layer"><span class="badge m3">M3</span><div><strong>Signature check</strong><p>Ed25519 signatures bound to a certified domain, verified against a pinned root key with a signed revocation list. Failing verification is stronger evidence of attack than being unsigned.</p></div></div>
+          </div>
+          <h3>What QRshield cannot do</h3>
+          <ul>
+            <li>A <strong>perfectly fitted sticker</strong> over an unsigned code looks like a genuine sticker. The sticker check catches imperfect covers; the signature check catches it only for businesses that sign.</li>
+            <li>A signature proves <em>who issued a payload</em>, not that the physical code was never copied (replay). Location binding, expiry and the sticker check limit this.</li>
+            <li>The link model is statistical; it will misjudge some legitimate and some malicious links.</li>
+          </ul>
         </div>
-        <p style="font-size: 0.84rem; color: var(--text-muted); margin-bottom: 16px;">
-          Human-in-the-loop review protecting ML pipeline against data poisoning. Approved samples feed continuous retraining.
-        </p>
-
-        <div style="overflow-x: auto;">
-          <table style="width: 100%; border-collapse: collapse; font-size: 0.84rem;">
-            <thead>
-              <tr style="border-bottom: 1px solid var(--border-color); text-align: left; color: var(--text-muted);">
-                <th style="padding: 10px;">Payload URL</th>
-                <th style="padding: 10px;">User Label</th>
-                <th style="padding: 10px;">Note</th>
-                <th style="padding: 10px;">Status</th>
-                <th style="padding: 10px;">Action</th>
-              </tr>
-            </thead>
-            <tbody id="reports-table-body">
-              <tr>
-                <td colspan="5" style="text-align: center; padding: 24px; color: var(--text-muted);">No reports pending review.</td>
-              </tr>
-            </tbody>
-          </table>
+        <div class="stack">
+          <div class="card"><div class="card-head"><h2>Measured results</h2><span class="chip">reproducible</span></div><div id="results-box" class="results">Loading&hellip;</div></div>
+          <div class="card prose"><h2>Privacy</h2><p>Photos are analysed in memory and not stored. Reports store the link, your label and an optional note &mdash; no photo and no identity. Scan history lives only in your browser.</p></div>
         </div>
       </div>
-    </div>
+    </section>
   </main>
 
-  <!-- Report Feedback Modal Dialog (F34) -->
-  <div id="report-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 200; align-items: center; justify-content: center;">
-    <div class="card" style="width: 90%; max-width: 450px;">
-      <div class="card-header">
-        <h2>Report Suspicious / False-Alarm QR</h2>
-        <button onclick="closeReportModal()" style="background: none; border: none; color: var(--text-muted); font-size: 1.2rem; cursor: pointer;">✕</button>
-      </div>
-      <div class="form-group">
-        <label>Classification</label>
-        <select id="report-label" class="form-control">
-          <option value="phishing">Phishing / Malicious Link</option>
-          <option value="tampered">Physical Sticker Overlay</option>
-          <option value="benign">Legitimate (False Positive)</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label>Optional Notes</label>
-        <textarea id="report-note" class="form-control" rows="3" placeholder="Context (e.g. found on parking meter in Andheri)"></textarea>
-      </div>
-      <div class="btn-group">
-        <button class="btn btn-secondary" onclick="closeReportModal()">Cancel</button>
-        <button class="btn btn-primary" onclick="submitFeedbackReport()">Submit Feedback</button>
-      </div>
-    </div>
-  </div>
+  <footer class="wrap footer muted small">
+    QRshield &middot; Team Black Sparrow &middot; SPIT Mumbai &middot; Cryptography &amp; Network Security (CE305/CS305)
+  </footer>
 
-  <script src="app.js"></script>
+  <dialog id="report-dialog" class="dialog">
+    <form method="dialog" id="report-form" class="form">
+      <h3>Report this code</h3>
+      <p class="muted small">Reports are reviewed by a person before they can influence anything.</p>
+      <label class="field"><span>What is it?</span>
+        <select id="report-label" class="input">
+          <option value="phishing">Phishing / malicious link</option>
+          <option value="tampered">Sticker pasted over another code</option>
+          <option value="benign">Actually legitimate (false alarm)</option>
+        </select></label>
+      <label class="field"><span>Note (optional)</span><textarea id="report-note" class="input" rows="3" maxlength="500" placeholder="Where did you find it?"></textarea></label>
+      <div class="btn-row end">
+        <button class="btn ghost" value="cancel" formnovalidate>Cancel</button>
+        <button id="report-send" class="btn primary" value="send"><svg class="icon"><use href="#i-flag"/></svg>Send report</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="login-dialog" class="dialog">
+    <form method="dialog" id="login-form" class="form">
+      <h3>Admin sign-in</h3>
+      <p class="muted small">Enter the admin token printed in the server console (also saved in <code>.qrshield/admin_token</code>).</p>
+      <label class="field"><span>Admin token</span><input id="login-token" class="input mono" type="password" autocomplete="off" required></label>
+      <p id="login-error" class="error small" hidden></p>
+      <div class="btn-row end">
+        <button class="btn ghost" value="cancel" formnovalidate>Cancel</button>
+        <button id="login-send" class="btn primary" value="ok">Sign in</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+  <script type="module" src="js/main.js"></script>
 </body>
 </html>
