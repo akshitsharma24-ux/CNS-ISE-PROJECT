@@ -1,44 +1,56 @@
-# QRshield Threat Model & Security Analysis (F40)
+# QRshield threat model
 
-This document formalizes the threat landscape, adversary capabilities, and defense mechanisms engineered into QRshield, mapping directly onto the requirements of the Cryptography and Network Security (CE305/CS305) syllabus.
+## Assets and actors
 
----
+| Asset | Why it matters |
+|---|---|
+| The person scanning | credentials, OTPs, payments, device |
+| A business's brand and payment channel | impersonated by look-alike links and pasted stickers |
+| The registry root key and issuer keys | whoever holds them can mint "certified" codes |
+| The analyser server | it fetches attacker-chosen URLs (SSRF surface) and parses attacker-chosen images |
+| The training pipeline | fed by user reports (poisoning surface) |
 
-## 1. Adversary Model & Assumptions
+**Adversary:** can print any QR code, paste stickers on public signage, register look-alike domains, run web servers, submit reports and uploads, and observe/copy any signed code. **Cannot:** break Ed25519/SHA-2, steal the registry root key, or alter the verifier's pinned root. A compromised *issuer* key is in scope (see revocation).
 
-We assume an adversary with the following capabilities:
-1. **Physical Access**: The adversary can print stickers, manipulate physical QR posters, and paste fraudulent codes onto public infrastructure (e.g. municipal parking meters, restaurant tables, college notice boards).
-2. **Network Capabilities**: The adversary can register new lookalike domains, deploy phishing landing pages, configure homoglyph characters, and manipulate redirect chains.
-3. **Cryptographic Knowledge**: The adversary has full access to the open-source client code and protocol specifications. They can craft arbitrary QR tokens, generate their own asymmetric keys, and attempt replay or parameter-tampering attacks.
-4. **Adversary Limitations**: The adversary **cannot** forge Ed25519 signatures without the private key, **cannot** obtain a certificate signed by the pinned root authority without compromise, and **cannot** break SHA-256 collision resistance.
+**Trust anchors:** the pinned registry root public key (in this demo the registry and verifier share a machine, so the key is read from the local registry; a production verifier would ship it inside the app). The admin token protects registry operations.
 
----
+## Attack table - and the test that proves each defence
 
-## 2. Attack Vectors and Defense Mechanisms
+| # | Attack | Result | Defence | Honest limit | Test |
+|---|---|---|---|---|---|
+| 1 | Print a code with a fake / random token | `invalid` -> BLOCK | Ed25519 verification; "claims certification but fails" is stronger evidence than unsigned | none | `test_attack_fake_token_random_bytes` |
+| 2 | Sign with own key while claiming a real issuer | `invalid` | signature checked against the *certified* key | none | `test_attack_signature_from_attackers_own_key...` |
+| 3 | Self-signed issuer under a rogue root | `unknown_issuer` | certificate must verify against the pinned root | none | `test_attack_self_signed_certificate_with_a_rogue_root` |
+| 4 | Swap a cached certificate for a forged one | `unknown_issuer` | cache entries are re-verified against the root at use | none | `test_attack_cache_poisoning_...` |
+| 5 | Real issuer key certifies a look-alike domain | `domain_mismatch` -> BLOCK | domain binding: host must equal / be a subdomain of the certified domain (`evil.com` suffix tricks fail) | none | `test_attack_legit_key_certifies_a_lookalike_domain`, `test_lookalike_suffix_is_not_a_subdomain` |
+| 6 | Strip the token and paste an unsigned sticker | `none` (never `certified`) | only a *positive* verification yields "certified"; the link + sticker layers still run | an unsigned code gets no cryptographic protection. Certified businesses should print a visible "QRshield certified" mark so a missing mark is a red flag (user education) | `test_attack_stripped_token_is_never_certified` |
+| 7 | Edit the URL or any token field | `invalid` | signature covers canonical URL, issuer, key id, location, iat, exp | none | `test_attack_any_edit_breaks_the_signature`, `test_attack_edit_token_fields_individually` |
+| 8 | Forged token that is also "expired" to get the milder verdict | `invalid` (BLOCK) | signature is verified **before** expiry/domain are trusted | none | `test_forged_signature_cannot_hide_behind_expiry` |
+| 9 | Replay an old code after expiry | `expired` -> SUSPICIOUS | `exp` is signed | codes issued with "never expires" are replayable until revoked | `test_attack_replay_after_expiry` |
+| 10 | **Copy a genuine signed code to another place** | `valid` | the signed location id is surfaced; expiry; the sticker check flags paste-overs | **A signature cannot detect a faithful copy.** This is an inherent limit of any signature scheme. Mitigations are partial (location binding is *shown*, not enforced by a registry lookup; rolling tokens for payment counters are future work) | `test_replay_of_a_genuine_signed_code_...` |
+| 11 | Use a stolen issuer key | `revoked` after the CRL update | root-signed, versioned CRL; per-key revocation; key rotation; short-lived certificates | valid until the verifier sees the new CRL (offline verifiers lag by their cache age) | `test_attack_stolen_key_after_revocation`, `test_key_rotation_invalidates_the_stolen_old_key` |
+| 12 | Roll the CRL back to hide a revocation | rejected | verifiers keep the highest version seen and verify the CRL signature | a brand-new verifier with no cache has nothing to compare against | `test_attack_crl_rollback_hides_a_revocation`, `test_crl_rollback_is_rejected` |
+| 13 | Forge a CRL | rejected | CRL must verify against the pinned root | none | `test_attack_forged_crl_signed_by_someone_else` |
+| 14 | Run the verifier without a trust anchor | everything `unknown_issuer` | fail closed | none | `test_no_trust_anchor_means_nothing_verifies` |
+| 15 | Register a certificate for a bare suffix (`com`, `co.in`) or an IP | refused | `validate_certified_domain` | the registry still trusts the *admin* to vet who owns a domain (no DNS challenge in this demo) | `test_bare_suffix_and_garbage_domains_rejected` |
+| 16 | Call registry/admin routes without the token | 401 | admin token, constant-time compare | the token is a single shared secret, appropriate for a demo, not for production | `test_admin_routes_require_the_token` |
+| 17 | Make the analyser fetch internal URLs (SSRF) via a shortener or redirect | blocked | http(s) only; resolve once, every address must be globally routable; connect to the validated IP (DNS-rebinding-proof); every hop re-validated; HEAD only, timeouts | a hostile *public* server can still learn that its link was scanned (privacy) - shortener inspection can be disabled with `QRSHIELD_ONLINE_CHECKS=0` | `tests/test_network_security.py` |
+| 18 | Upload a decompression bomb / giant file / garbage | refused before decoding | size and pixel limits checked from the header | none | `test_decompression_bomb_*`, `test_oversized_upload_*` |
+| 19 | Hostile payload (`http://[x`, 4 kB strings, NULs, script tags) | never a 500 | parsing never raises; output is data, rendered as text | none | `test_hostile_payloads_never_cause_a_500` |
+| 20 | Stored XSS through reports or issuer names | inert | UI builds DOM with `textContent` only; strict CSP forbids inline script | none | `test_report_then_admin_review_and_xss_is_inert` (browser) |
+| 21 | Click-jack a "SAFE" verdict | blocked | `frame-ancestors 'none'` / `X-Frame-Options: DENY` | none | `test_index_and_assets_served_with_security_headers` |
+| 22 | **Poison the model** by mass-reporting good links as phishing | candidate rejected | human review + fixed benchmark + canary links; only approved reports are used | an attacker who also fools the reviewer on many *plausible* reports could bias the model within the gate's tolerance | `test_poisoning_by_mass_reports_is_rejected` |
+| 23 | Abuse scan/report endpoints | 429 | sliding-window rate limits | per-IP limits are bypassable by distributed clients | `test_rate_limits` |
+| 24 | Sticker pasted over a legitimate **unsigned** code | `SUSPICIOUS` for imperfect covers | sticker check + link check | **A perfectly fitted sticker is close to indistinguishable from a genuine sticker.** Recall for exact-fit/larger covers is low (`docs/evaluation.md`); only signing the *original* code makes that attack detectable | `docs/results/cv_metrics.json` |
 
-| Attack Scenario | Adversary Action | Detection Layer | Engine Decision | Defense & Mathematical Justification |
-|---|---|---|---|---|
-| **Sticker Replacement (Physical Quishing)** | Pastes fraudulent QR sticker over genuine parking meter | **M2: Computer Vision** | `SUSPICIOUS` or `BLOCK` | Multi-physics features flag boundary gradient discontinuity, straight cutlines, 3D micro-shadows, and Delta-E color differences. |
-| **Zero-Day Phishing URL** | Uses un-blacklisted brand-new domain with typosquatting | **M1: URL / Payload ML** | `BLOCK` | Calibrated ML classifier flags low domain age, abused TLDs (.xyz, .top), high host entropy, and Jaro-Winkler proximity to target brands. |
-| **Forged Signature Token** | Crafts invalid or fabricated Ed25519 token claiming to be certified | **M3: Crypto Layer** | `BLOCK` | Signature verification against issuer public key fails. Reject code claiming certification that cannot prove it. |
-| **Rogue / Self-Signed Root** | Attacker signs own certificate with self-generated authority key | **M3: Crypto Layer** | `BLOCK` (unknown issuer) | Verifier checks certificate against the pinned Root Public Key embedded directly in the application trust store. |
-| **Domain Binding Violation** | Legitimate issuer key hijacked or abused to sign a phishing URL | **M3: Crypto Layer** | `BLOCK` (domain mismatch) | Verifier extracts domain from issuer cert and validates that the target URL host strictly matches or is a certified subdomain. |
-| **Replay of Signed Token** | Copies a genuine signed QR from a legitimate store to a fake site | **M3 + M2 + M1** | `SUSPICIOUS` or `BLOCK` | Honest limit of static signatures. Mitigated by: location binding (`loc` parameter), expiration windows (`exp`), and physical sticker detection (M2). |
-| **Parameter Tampering** | Attacker modifies payment amount or URL path inside signed link | **M3: Crypto Layer** | `BLOCK` (invalid) | Signature is computed over canonical URL including sorted query parameters. Any modification invalidates the Ed25519 signature. |
-| **Compromised Issuer Key** | Organization private key leaked | **M3: Crypto Layer** | `BLOCK` (revoked) | Root authority signs and distributes an updated Certificate Revocation List (CRL). Cached by clients and enforced locally. |
-| **Server-Side Request Forgery (SSRF)** | Attacker submits QR with `127.0.0.1` or AWS metadata IP `169.254.169.254` | **M1: fetch_safe.py** | Request Blocked | Resolver blocks RFC 1918 private, loopback, link-local, carrier-grade NAT, and cloud metadata IPs prior to any socket connection. |
-| **Data Poisoning via Feedback Queue** | Attackers flood user report queue to mark good links as bad | **M5 / Admin Gate** | Quarantined | Reports enter a quarantined pending queue requiring human admin approval before feeding retraining benchmark gates. |
+## Design decisions worth defending
 
----
+* **Why Ed25519?** 64-byte signatures (RSA-2048: 256) keep the printed code sparse and easy to scan; deterministic signing removes ECDSA nonce-reuse failures; fast verification; strong security level; a mature, audited implementation (`cryptography`).
+* **Why a binary token?** ~140 characters versus ~290 for JSON: fewer modules means a larger, more robust printed code.
+* **Why verify the signature first?** So a forged token cannot choose a gentler verdict by pretending to be expired.
+* **Why can a photo never BLOCK on its own?** Visual evidence is probabilistic and, on simulated data, has a measurable false-positive rate; a wrong BLOCK is costly, so it only escalates to SUSPICIOUS unless another independent layer agrees.
+* **Why not just a blocklist?** It is reactive: it misses zero-day links and cannot see a sticker over a clean link.
 
-## 3. Cryptographic Primitives Justification (Viva Preparation)
+## Privacy
 
-### Why Ed25519 instead of RSA-2048 or ECDSA?
-1. **Compact Signature Size**: Ed25519 signatures are exactly 64 bytes (public keys are 32 bytes). RSA-2048 signatures are 256 bytes, which would create dense, high-version QR codes that are slow or impossible to scan on low-end cameras.
-2. **Deterministic Signing**: Ed25519 uses RFC 8032 deterministic nonce generation ($r = H(h_b, \dots, M)$). ECDSA requires a fresh random nonce $k$ per signature; any flaw or bias in the RNG leaks the private key (e.g. Sony PS3 private key recovery).
-3. **High Performance**: Verification requires $< 0.1\text{ ms}$, ensuring zero perceptible latency during live mobile scanning.
-4. **Collision Resistance**: Uses SHA-512 internally for hash digest expansion.
-
-### SSRF Guard as a Core Network Security Decision
-When an analysis engine follows redirects or fetches headers from user-supplied URLs, it acts as an HTTP client on behalf of an untrusted actor. If not protected, an attacker can use QR codes to scan internal infrastructure, hit `localhost:8000`, or extract cloud credentials from `http://169.254.169.254/latest/meta-data/`.
-In `fetch_safe.py`, QRshield resolves DNS independently and validates all resolved IP addresses against an explicit private/link-local/loopback filter before issuing any request. It caps responses to 50KB, sets a 3-second timeout, limits redirects to 5 hops, and never executes JavaScript.
+Photos are analysed in memory and not stored. Reports store the link, a SHA-256 fingerprint, the user's label and optional note - no photo, no identity. Scan telemetry stores only a payload hash, scores and timing. History in the browser stays in the browser.
