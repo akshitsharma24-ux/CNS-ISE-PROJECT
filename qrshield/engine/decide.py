@@ -1,120 +1,107 @@
 """
-M4: Aggregation and Scoring Engine (F30).
-Rule-first, score-second arbitration engine fusing URL ML, CV Physical Tamper,
-and Ed25519 Cryptographic validation into an authoritative security verdict.
+M4: aggregation and scoring engine (F30).
+
+Rule first, score second:
+
+  1. Cryptographic facts decide before any score is computed.
+       valid                                -> SAFE + "certified" (downgraded to SUSPICIOUS if the
+                                               sign physically looks pasted over)
+       invalid / unknown_issuer / revoked /
+       domain_mismatch                      -> BLOCK  (claiming authenticity it cannot prove is worse
+                                               than being unsigned)
+       expired                              -> at least SUSPICIOUS
+  2. Unsigned codes (the common case) are fused with noisy-OR:
+       risk = 1 - (1 - a*url_risk) * (1 - b*tamper_risk)
+     The tamper probability is first rescaled (p <= 0.40 counts as nothing, p >= 0.95 as full risk) and
+     visual evidence is deliberately capped (b < 0.65) so a photo alone can never BLOCK: it can only raise
+     SUSPICIOUS. Two independent layers agreeing (url>0.5 and tamper>0.5) floors the risk at 0.85.
+  3. Hard overrides: blocklist hit or dangerous scheme -> BLOCK; stacked codes, UPI payee mismatch and
+     inconsistent two-photo decodes -> at least SUSPICIOUS.
 """
-from typing import Dict, Any, List
+from __future__ import annotations
+
+from typing import Any, Dict, List
+
+from qrshield import config
 from qrshield.engine.reasons import generate_reasons
 
-def decide(
-    url_res: Dict[str, Any],
-    cv_res: Dict[str, Any],
-    sig_res: Dict[str, Any]
-) -> Dict[str, Any]:
-    """
-    Contract specified in QRshield Master Plan:
-    engine.decide(url_res, cv_res, sig_res) -> {
-        "verdict": "SAFE|SUSPICIOUS|BLOCK",
-        "risk": 0.0-1.0,
-        "certified": bool,
-        "reasons": [str, ...]
-    }
-    """
-    sig_status = sig_res.get("status", "none")
-    url_risk = float(url_res.get("score", 0.0))
-    tamper_risk = float(cv_res.get("score", 0.0))
-    cv_status = cv_res.get("status", "ok")
 
-    # --- Step 1: Crypto Hard Facts Check ---
-    if sig_status == "valid":
-        certified = True
-        # If valid cryptographic token, but physical sticker is overlaid over something
-        if tamper_risk >= 0.70:
-            verdict = "SUSPICIOUS"
-            risk = max(0.55, tamper_risk)
-        else:
-            verdict = "SAFE"
-            risk = round(max(0.02, tamper_risk * 0.15), 4)
+def _names(res: Dict[str, Any]) -> set:
+    return {s.get("name") for s in res.get("signals", []) if s.get("direction", "risk") == "risk"}
 
-        reasons = generate_reasons(url_res, cv_res, sig_res, verdict, certified)
-        return {
-            "verdict": verdict,
-            "risk": risk,
-            "certified": certified,
-            "reasons": reasons
-        }
 
-    if sig_status in ("invalid", "unknown_issuer", "revoked", "domain_mismatch"):
-        certified = False
-        verdict = "BLOCK"
-        risk = 0.95
-        reasons = generate_reasons(url_res, cv_res, sig_res, verdict, certified)
-        return {
-            "verdict": verdict,
-            "risk": risk,
-            "certified": certified,
-            "reasons": reasons
-        }
+def _shape(p: float, floor: float, ceil: float) -> float:
+    return min(max((p - floor) / (ceil - floor), 0.0), 1.0)
 
-    if sig_status == "expired":
-        certified = False
-        verdict = "SUSPICIOUS"
-        risk = 0.60
-        reasons = generate_reasons(url_res, cv_res, sig_res, verdict, certified)
-        return {
-            "verdict": verdict,
-            "risk": risk,
-            "certified": certified,
-            "reasons": reasons
-        }
 
-    # --- Step 2: Unsigned QR Code Scoring (Noisy-OR Fusion) ---
-    certified = False
-    a = 0.95
-    b = 0.50 if cv_status == "inconclusive" else 0.80
+def _verdict_for(risk: float) -> str:
+    if risk < config.SAFE_BELOW:
+        return "SAFE"
+    return "SUSPICIOUS" if risk < config.BLOCK_FROM else "BLOCK"
 
-    fused_risk = 1.0 - ((1.0 - a * url_risk) * (1.0 - b * tamper_risk))
 
-    # Two independent layers agree on threat
-    if url_risk > 0.50 and tamper_risk > 0.50:
-        fused_risk = max(fused_risk, 0.85)
-
-    fused_risk = round(min(max(fused_risk, 0.0), 1.0), 4)
-
-    # Initial threshold mapping
-    if fused_risk < 0.30:
-        verdict = "SAFE"
-    elif fused_risk < 0.65:
-        verdict = "SUSPICIOUS"
-    else:
-        verdict = "BLOCK"
-
-    # --- Step 3: Hard Overrides ---
-    url_signals = url_res.get("signals", [])
-    has_blocklist = any(s.get("name") == "blocklist_match" for s in url_signals)
-    has_dangerous_scheme = any(s.get("name") == "dangerous_scheme" for s in url_signals)
-    has_payee_mismatch = any(s.get("name") == "payee_vpa_mismatch" for s in url_signals)
-    has_stacked_code = any(s.get("name") == "stacked_code_pattern" for s in cv_res.get("signals", []))
-
-    if has_blocklist:
-        verdict = "BLOCK"
-        fused_risk = 1.0
-    elif has_dangerous_scheme:
-        verdict = "BLOCK"
-        fused_risk = max(fused_risk, 0.95)
-    elif has_stacked_code:
-        verdict = "BLOCK"
-        fused_risk = max(fused_risk, 0.85)
-    elif has_payee_mismatch:
-        if verdict == "SAFE":
-            verdict = "SUSPICIOUS"
-        fused_risk = max(fused_risk, 0.60)
-
-    reasons = generate_reasons(url_res, cv_res, sig_res, verdict, certified)
-
+def _finish(verdict, risk, certified, url_res, cv_res, sig_res, overrides, breakdown):
     return {
-        "verdict": verdict,
-        "risk": round(float(fused_risk), 4),
-        "certified": certified,
-        "reasons": reasons
+        "verdict": verdict, "risk": round(float(min(max(risk, 0.0), 1.0)), 4), "certified": certified,
+        "reasons": generate_reasons(url_res, cv_res, sig_res, verdict, certified, overrides),
+        "breakdown": {**breakdown, "overrides": overrides},
     }
+
+
+def decide(url_res: Dict[str, Any], cv_res: Dict[str, Any], sig_res: Dict[str, Any]) -> Dict[str, Any]:
+    sig = sig_res.get("status", "none")
+    url_risk = float(url_res.get("score", 0.0))
+    cv_status = cv_res.get("status", "ok")
+    tamper_p = 0.0 if cv_status == "low_quality" else float(cv_res.get("score", 0.0))     # calibrated probability
+    tamper = _shape(tamper_p, config.TAMPER_P_FLOOR, config.TAMPER_P_CEIL)                # decision-scale risk
+
+    breakdown: Dict[str, Any] = {"url_risk": round(url_risk, 4), "tamper_probability": round(tamper_p, 4),
+                                 "tamper_risk": round(tamper, 4), "signature": sig, "cv_status": cv_status}
+    overrides: List[str] = []
+
+    # ---- 1. cryptographic hard facts ------------------------------------------------------
+    if sig == "valid":
+        if tamper_p >= 0.70:
+            overrides.append("certified_but_physically_tampered")
+            return _finish("SUSPICIOUS", max(0.55, tamper_p * 0.8), True, url_res, cv_res, sig_res, overrides, breakdown)
+        return _finish("SAFE", max(0.02, tamper_p * 0.15), True, url_res, cv_res, sig_res, overrides, breakdown)
+
+    if sig in ("invalid", "unknown_issuer", "revoked", "domain_mismatch"):
+        overrides.append(f"signature_{sig}")
+        return _finish("BLOCK", 0.95, False, url_res, cv_res, sig_res, overrides, breakdown)
+
+    # ---- 2. noisy-OR fusion for unsigned codes ---------------------------------------------
+    a = config.URL_WEIGHT
+    b = {"ok": config.TAMPER_WEIGHT, "inconclusive": config.TAMPER_WEIGHT_INCONCLUSIVE, "low_quality": 0.0}.get(cv_status, config.TAMPER_WEIGHT)
+    fused = 1.0 - (1.0 - a * url_risk) * (1.0 - b * tamper)
+    if url_risk > 0.5 and tamper > 0.5 and cv_status != "low_quality":
+        fused = max(fused, config.AGREEMENT_FLOOR)
+        overrides.append("two_layers_agree")
+    breakdown.update(a=a, b=b, fused=round(fused, 4))
+
+    if sig == "expired":
+        fused = max(fused, 0.60)
+        overrides.append("signature_expired")
+    risk = min(max(fused, 0.0), 1.0)
+
+    # ---- 3. hard overrides ---------------------------------------------------------------------
+    url_names, cv_names = _names(url_res), _names(cv_res)
+    floor = 0.0
+    verdict = _verdict_for(risk)
+    if "blocklist_match" in url_names:
+        overrides.append("blocklist_hit")
+        return _finish("BLOCK", 1.0, False, url_res, cv_res, sig_res, overrides, breakdown)
+    if "dangerous_scheme" in url_names:
+        overrides.append("dangerous_scheme")
+        return _finish("BLOCK", max(risk, 0.95), False, url_res, cv_res, sig_res, overrides, breakdown)
+    if "stacked_code_pattern" in cv_names:
+        floor = max(floor, config.SAFE_BELOW + 0.05); overrides.append("stacked_codes")
+    if "payee_vpa_mismatch" in url_names:
+        floor = max(floor, 0.60); overrides.append("upi_payee_mismatch")
+    if "payload_mismatch_multi_view" in cv_names:
+        floor = max(floor, 0.55); overrides.append("two_photos_disagree")
+    if floor and risk < floor:
+        risk = floor
+        verdict = _verdict_for(risk)
+
+    return _finish(verdict, risk, False, url_res, cv_res, sig_res, overrides, breakdown)

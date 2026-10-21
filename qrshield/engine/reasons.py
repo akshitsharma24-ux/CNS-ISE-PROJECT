@@ -1,82 +1,67 @@
-"""
-Plain-language explanation and reason generator (F31).
-Fuses top contributing signals from URL/ML, CV/Physical, and Crypto layers
-into concise, human-understandable explanation sentences (max 3 bullets).
-"""
-from typing import Dict, Any, List
+"""Plain-language reasons (F31): at most three bullets, most decisive first."""
+from __future__ import annotations
 
-def generate_reasons(
-    url_res: Dict[str, Any],
-    cv_res: Dict[str, Any],
-    sig_res: Dict[str, Any],
-    verdict: str,
-    certified: bool
-) -> List[str]:
-    """
-    Selects top 1 to 3 plain-language reason strings explaining the verdict.
-    """
+from typing import Any, Dict, List
+
+_CRYPTO_BLOCK = {
+    "invalid": "This code claims to be digitally signed, but the signature does not verify - it has been forged or altered.",
+    "unknown_issuer": "This code claims to be certified, but its issuer is not registered with the QRshield authority.",
+    "revoked": "The business's signing key was revoked by the registry - this code can no longer be trusted.",
+    "domain_mismatch": "A genuine issuer signed a link outside the domain it is certified for - a classic lookalike trick.",
+    "expired": "This signed code has expired and should have been replaced.",
+}
+_URL_PRIORITY = ("blocklist_match", "dangerous_scheme", "brand_impersonation", "payee_vpa_mismatch", "upi_collect",
+                 "newly_registered_domain", "malformed_url", "domain_redirect_mismatch", "url_shortener", "shortener_unresolved")
+_CV_PRIORITY = ("stacked_code_pattern", "payload_mismatch_multi_view", "hidden_code_fragments", "sticker_edge_detected",
+                "sticker_elevation_shadow", "double_layer_border", "paper_color_discrepancy", "gloss_mismatch",
+                "print_texture_mismatch", "photometric_relief")
+
+
+def _risk_signals(signals: List[Dict[str, Any]], priority: tuple) -> List[str]:
+    risky = [s for s in signals if s.get("direction", "risk") == "risk" and s.get("text")]
+    order = {n: i for i, n in enumerate(priority)}
+    risky.sort(key=lambda s: order.get(s.get("name"), len(priority)))
+    return [s["text"] for s in risky]
+
+
+def generate_reasons(url_res: Dict[str, Any], cv_res: Dict[str, Any], sig_res: Dict[str, Any], verdict: str,
+                     certified: bool, overrides: List[str]) -> List[str]:
+    sig = sig_res.get("status", "none")
     reasons: List[str] = []
-    sig_status = sig_res.get("status", "none")
 
-    # 1. Crypto Layer Explanations
-    if certified and sig_status == "valid":
-        issuer = sig_res.get("issuer", {})
-        issuer_name = issuer.get("name", "Verified Organization")
-        reasons.append(f"Provably authentic QR issued by '{issuer_name}' and verified via Ed25519 PKI.")
-        # If tampered physically despite valid crypto
-        if cv_res.get("score", 0.0) >= 0.70:
-            reasons.append("Warning: Cryptographic signature is valid, but physical code appears pasted over another surface.")
+    if certified and sig == "valid":
+        issuer = sig_res.get("issuer") or {}
+        reasons.append(f"Digitally signed by '{issuer.get('name', 'a registered business')}' and verified against the "
+                       f"QRshield root of trust (domain {issuer.get('domain', '?')}).")
+        if cv_res.get("score", 0.0) >= 0.70 and cv_res.get("status") != "low_quality":
+            reasons.append("But the code physically looks stuck on top of something else - check the sign before paying.")
         return reasons[:3]
 
-    if sig_status == "revoked":
-        reasons.append("BLOCK: Business signing certificate has been revoked by Root Authority (CRL).")
-    elif sig_status == "expired":
-        reasons.append("SUSPICIOUS: Time-limited QR code token has expired.")
-    elif sig_status == "domain_mismatch":
-        issuer = sig_res.get("issuer", {})
-        iss_dom = issuer.get("domain", "")
-        reasons.append(f"BLOCK: Certificate domain mismatch - issuer '{iss_dom}' attempted to sign an unauthorized external link.")
-    elif sig_status in ("invalid", "unknown_issuer"):
-        reasons.append("BLOCK: Code claims digital certification but failed cryptographic verification.")
+    if sig in _CRYPTO_BLOCK:
+        reasons.append(_CRYPTO_BLOCK[sig])
 
-    # 2. Collect high-impact signals from URL and CV layers
-    url_signals = url_res.get("signals", [])
-    cv_signals = cv_res.get("signals", [])
+    for text in _risk_signals(url_res.get("signals", []), _URL_PRIORITY):
+        if len(reasons) < 2 and text not in reasons:
+            reasons.append(text)
+    for text in _risk_signals(cv_res.get("signals", []), _CV_PRIORITY):
+        if len(reasons) < 3 and text not in reasons:
+            reasons.append(text)
+    for text in _risk_signals(url_res.get("signals", []), _URL_PRIORITY):
+        if len(reasons) < 3 and text not in reasons:
+            reasons.append(text)
 
-    # Priority mapping for URL signals
-    for s in url_signals:
-        name = s.get("name", "")
-        text = s.get("text", "")
-        if name in ("blocklist_match", "dangerous_scheme", "typosquat_domain", "brand_in_subdomain_or_path", "payee_vpa_mismatch"):
-            if text and text not in reasons:
-                reasons.append(text)
-        elif name in ("newly_registered_domain", "brand_new_domain", "abused_tld", "ip_address_host", "url_shortener"):
-            if text and text not in reasons and len(reasons) < 3:
-                reasons.append(text)
-
-    # Priority mapping for CV signals
-    for s in cv_signals:
-        name = s.get("name", "")
-        text = s.get("text", "")
-        if name in ("stacked_code_pattern", "sticker_edge_detected", "sticker_edge_discontinuity", "cutlines_detected", "double_layer_border"):
-            if text and text not in reasons and len(reasons) < 3:
-                reasons.append(text)
-        elif name in ("paper_color_discrepancy", "sticker_elevation_shadow", "print_dpi_mismatch", "gloss_mismatch"):
-            if text and text not in reasons and len(reasons) < 3:
-                reasons.append(text)
-
-    # Inconclusive prompt hint
     if cv_res.get("status") == "inconclusive" and len(reasons) < 3:
-        reasons.append("Borderline visual surface analysis: prompt user for second angle photo.")
+        reasons.append("The visual check is borderline - take a second photo from the side to be sure.")
 
-    # Default benign reason if no alarms triggered
     if not reasons:
         if verdict == "SAFE":
-            reasons.append("No lexical, physical sticker, or domain anomalies detected.")
+            safe = [s["text"] for s in url_res.get("signals", []) if s.get("direction") == "safe"]
+            reasons.append(safe[0] if safe else "No suspicious link patterns or signs of a pasted-over sticker were found.")
+            reasons.append("This code is not digitally signed, so QRshield cannot prove who issued it.")
         elif verdict == "SUSPICIOUS":
-            reasons.append("Uncertain risk profile: moderate signals observed across features.")
+            reasons.append("Several weak warning signs add up - open the link only if you trust where you found this code.")
         else:
-            reasons.append("Elevated risk detected across analysis pipeline.")
-
-    # Cap to at most 3 clear bullet points
+            reasons.append("Strong evidence of a malicious or tampered code.")
+    elif verdict == "SAFE" and sig == "none":
+        reasons.append("This code is not digitally signed, so QRshield cannot prove who issued it.")
     return reasons[:3]

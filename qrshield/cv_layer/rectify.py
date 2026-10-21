@@ -1,106 +1,48 @@
 """
-QR Perspective Rectification and ROI Ring Partitioning (F14).
-Extracts QR corners, computes homography, and warps to a standardized
-square with surrounding context (1.5x QR width). Defines three analytical ROIs:
-1. QR core
-2. Quiet-zone ring
-3. Surrounding surface ring
+QR rectification and region geometry for the tamper layer (F14).
+
+The photo is warped (homography from the decoded QR corners) so the code sits in the centre of a
+fixed 384x384 canvas with exactly one QR-width of surrounding surface on every side:
+
+        +-----------------+     S = 384 px
+        |     surface     |     Q = 128 px  (QR width)
+        |   +---------+   |     every feature is measured in these canonical units, so
+        |   |   QR    |   |     it does not depend on how large the code is in the photo
+        |   +---------+   |
+        +-----------------+
 """
+from __future__ import annotations
+
+from typing import Tuple
+
 import cv2
 import numpy as np
-from typing import Tuple, Dict, Optional, Any
 
-TARGET_SIZE = 300  # Standard rectified dimension: 300x300 pixels
-QR_INNER_RATIO = 0.60  # QR code occupies inner 60% (180x180 px)
-QUIET_ZONE_RATIO = 0.75  # Quiet zone extends to 75% (225x225 px)
+from qrshield.capture.quality import order_corners
 
-def order_corner_points(pts: np.ndarray) -> np.ndarray:
-    """
-    Orders 4 points in canonical top-left, top-right, bottom-right, bottom-left sequence.
-    """
-    pts = np.squeeze(pts).astype(np.float32)
-    rect = np.zeros((4, 2), dtype=np.float32)
+S = 384
+Q = 128
+M = (S - Q) // 2                 # margin = 128 px = one QR width
 
-    # Sum of coords: top-left has minimum sum, bottom-right has maximum sum
-    s = pts.sum(axis=1)
-    rect[0] = pts[np.argmin(s)]
-    rect[2] = pts[np.argmax(s)]
+_yy, _xx = np.mgrid[0:S, 0:S]
+# Chebyshev distance outside the QR square (negative inside). 1 px ~ 1/128 of a QR width.
+DIST = np.maximum(np.abs(_xx - (S - 1) / 2.0), np.abs(_yy - (S - 1) / 2.0)) - Q / 2.0
 
-    # Difference of coords: top-right has minimum diff, bottom-left has maximum diff
-    diff = np.diff(pts, axis=1)
-    rect[1] = pts[np.argmin(diff)]
-    rect[3] = pts[np.argmax(diff)]
-
-    return rect
-
-def rectify_qr_crop(
-    img: np.ndarray,
-    corners: Optional[np.ndarray] = None
-) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
-    """
-    Warp image to rectified 300x300 coordinate space including surrounding surface.
-
-    Returns:
-      rectified_bgr: 300x300 np.ndarray
-      masks: dict containing boolean masks for 'qr_core', 'quiet_zone', 'surface'
-    """
-    h, w = img.shape[:2]
-
-    # If no corners provided, attempt to detect or fallback to center crop
-    if corners is None or len(corners) == 0:
-        detector = cv2.QRCodeDetector()
-        _, corners, _ = detector.detectAndDecode(img)
-
-    if corners is not None and len(corners) > 0:
-        pts = order_corner_points(corners)
-    else:
-        # Fallback bounding box around center
-        cx, cy = w / 2.0, h / 2.0
-        half = min(w, h) * 0.35
-        pts = np.array([
-            [cx - half, cy - half],
-            [cx + half, cy - half],
-            [cx + half, cy + half],
-            [cx - half, cy + half]
-        ], dtype=np.float32)
-
-    # Target points for the QR corners in the 300x300 canvas
-    # With QR_INNER_RATIO = 0.60, QR core will sit between margin and (TARGET_SIZE - margin)
-    margin = (1.0 - QR_INNER_RATIO) / 2.0 * TARGET_SIZE
-    qr_max = TARGET_SIZE - margin
-
-    dst_pts = np.array([
-        [margin, margin],
-        [qr_max, margin],
-        [qr_max, qr_max],
-        [margin, qr_max]
-    ], dtype=np.float32)
-
-    # Perspective homography with border replication to avoid artificial black boundaries
-    H = cv2.getPerspectiveTransform(pts, dst_pts)
-    rectified_bgr = cv2.warpPerspective(
-        img, H, (TARGET_SIZE, TARGET_SIZE),
-        flags=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_REPLICATE
-    )
+CORE = DIST < -2                 # QR modules (shrunk by 2 px to avoid the edge)
 
 
-    # Generate ROI Masks
-    masks = {}
+def ring(lo: float, hi: float) -> np.ndarray:
+    """Boolean mask of pixels whose distance outside the QR lies in [lo, hi)."""
+    return (DIST >= lo) & (DIST < hi)
 
-    # 1. QR Core Mask (inner region)
-    qr_mask = np.zeros((TARGET_SIZE, TARGET_SIZE), dtype=bool)
-    qr_mask[int(margin):int(qr_max), int(margin):int(qr_max)] = True
-    masks["qr_core"] = qr_mask
 
-    # 2. Quiet Zone Ring Mask (band between QR core and quiet boundary)
-    qz_margin = (1.0 - QUIET_ZONE_RATIO) / 2.0 * TARGET_SIZE
-    qz_max = TARGET_SIZE - qz_margin
-    qz_full = np.zeros((TARGET_SIZE, TARGET_SIZE), dtype=bool)
-    qz_full[int(qz_margin):int(qz_max), int(qz_margin):int(qz_max)] = True
-    masks["quiet_zone"] = qz_full & (~qr_mask)
-
-    # 3. Outer Surface Ring Mask (perimeter area outside quiet zone)
-    masks["surface"] = ~qz_full
-
-    return rectified_bgr, masks
+def rectify(img: np.ndarray, corners: np.ndarray) -> Tuple[np.ndarray, float]:
+    """Return (rectified BGR canvas, fraction of the canvas covered by real photo pixels)."""
+    src = order_corners(corners)
+    dst = np.array([[M, M], [M + Q - 1, M], [M + Q - 1, M + Q - 1], [M, M + Q - 1]], dtype=np.float32)
+    h = cv2.getPerspectiveTransform(src, dst)
+    rect = cv2.warpPerspective(img, h, (S, S), flags=cv2.INTER_AREA if Q < 0.8 * np.linalg.norm(src[1] - src[0]) else cv2.INTER_LINEAR,
+                               borderMode=cv2.BORDER_REPLICATE)
+    ones = np.full(img.shape[:2], 255, np.uint8)
+    valid = cv2.warpPerspective(ones, h, (S, S), flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+    return rect, float((valid > 0).mean())

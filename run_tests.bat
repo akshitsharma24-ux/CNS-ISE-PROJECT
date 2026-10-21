@@ -1,14 +1,12 @@
 @echo off
-echo ========================================================
-echo  Running QRshield 49-Test Unit ^& Red-Team Test Suite
-echo ========================================================
-echo.
-where py >nul 2>nul
-if %errorlevel% equ 0 (
-    set PY_CMD=py -3.12
-) else (
-    set PY_CMD=python
+rem Run the QRshield test-suite with the project's virtual environment.
+setlocal
+cd /d "%~dp0"
+if not exist ".venv\Scripts\python.exe" (
+    echo Run run_demo.bat once first to create the virtual environment.
+    pause
+    exit /b 1
 )
-
-%PY_CMD% -m pytest tests/ -v
+".venv\Scripts\python.exe" -m pip install -q -r requirements-dev.txt
+".venv\Scripts\python.exe" -m pytest %*
 pause

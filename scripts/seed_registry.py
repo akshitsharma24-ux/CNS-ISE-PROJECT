@@ -1,61 +1,19 @@
 """
-Seed Registry and Demo Certificates (F26, F28).
-Pre-registers sample demo authorities and businesses:
-1. Mumbai Smart City Parking (pay.citypark.example)
-2. SPIT Admissions Authority (spit.ac.in)
-Generates root authority key and signs certificates.
+Create the runtime registry: root key, demo issuers (keys generated locally - nothing is committed).
+
+    python -m scripts.seed_registry
 """
-import os
-import json
-from qrshield.registry.admin import (
-    init_db,
-    get_or_create_root_key,
-    register_issuer,
-    sync_all_certificates_to_verifier
-)
-from qrshield.crypto_layer.keys import (
-    generate_keypair,
-    export_public_key_b64,
-    export_private_key_b64,
-    load_private_key_b64
-)
+from qrshield.registry import Registry
 
-# Deterministic demo private keys
-CITYPARK_PRIV_B64 = "eHl6MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODk"
-SPIT_PRIV_B64 = "YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXoxMjM0NTY"
 
-def seed_demo_issuers():
-    init_db()
-    root_priv, root_pub = get_or_create_root_key()
+def main() -> None:
+    reg = Registry().ensure_ready(seed_demo=True)
+    print(f"Runtime home    : {reg.home}")
+    print(f"Root public key : {reg.root_public_key_b64}")
+    for i in reg.list_issuers():
+        print(f"Issuer          : {i['issuer_id']:12s} {i['name']}  ({i['domain']})  key {i['key_id']}")
+    print(f"Admin token     : {reg.admin_token()}")
 
-    # Issuer 1: Mumbai Smart City Parking
-    citypark_priv = load_private_key_b64(CITYPARK_PRIV_B64)
-    citypark_pub = citypark_priv.public_key()
-    citypark_pub_b64 = export_public_key_b64(citypark_pub)
-
-    cert1 = register_issuer(
-        issuer_id="citypark-01",
-        name="Mumbai Smart City Parking",
-        domain="pay.citypark.example",
-        issuer_pubkey_b64=citypark_pub_b64
-    )
-    print("Registered Issuer: Mumbai Smart City Parking (citypark-01)")
-
-    # Issuer 2: SPIT Mumbai
-    spit_priv = load_private_key_b64(SPIT_PRIV_B64)
-    spit_pub = spit_priv.public_key()
-    spit_pub_b64 = export_public_key_b64(spit_pub)
-
-    cert2 = register_issuer(
-        issuer_id="spit-admit",
-        name="SPIT Admissions Authority",
-        domain="spit.ac.in",
-        issuer_pubkey_b64=spit_pub_b64
-    )
-    print("Registered Issuer: SPIT Admissions Authority (spit-admit)")
-
-    sync_all_certificates_to_verifier()
-    print("Demo registry successfully seeded and synchronized.")
 
 if __name__ == "__main__":
-    seed_demo_issuers()
+    main()

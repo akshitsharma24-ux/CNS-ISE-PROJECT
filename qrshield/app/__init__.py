@@ -1,6 +1,1 @@
-"""
-QRshield Application package
-"""
-from qrshield.app.api import app
-
-__all__ = ["app"]
+"""QRshield web application package. Use `qrshield.app.api.create_app()` or `uvicorn qrshield.app.api:app`."""

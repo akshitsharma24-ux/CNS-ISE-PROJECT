@@ -1,0 +1,403 @@
+{
+  "generated_at": "2026-10-21",
+  "n_scenarios": 310,
+  "n_scanned": 306,
+  "decode_failures": 4,
+  "signed_sanity_check": "valid",
+  "url_sources": "real corpora (pirocheto benign + 2026 phishing feeds) + synthetic local-business",
+  "simulated_photos": true,
+  "ablation": {
+    "url_only": {
+      "genuine_unsigned": {
+        "n": 60,
+        "flagged_pct": 3.3,
+        "blocked_pct": 1.7,
+        "truth": "good"
+      },
+      "genuine_signed": {
+        "n": 39,
+        "flagged_pct": 0.0,
+        "blocked_pct": 0.0,
+        "truth": "good"
+      },
+      "phishing_url": {
+        "n": 59,
+        "flagged_pct": 93.2,
+        "blocked_pct": 91.5,
+        "truth": "bad"
+      },
+      "sticker_over_unsigned": {
+        "n": 60,
+        "flagged_pct": 5.0,
+        "blocked_pct": 0.0,
+        "truth": "bad"
+      },
+      "sticker_over_signed": {
+        "n": 40,
+        "flagged_pct": 0.0,
+        "blocked_pct": 0.0,
+        "truth": "bad"
+      },
+      "forged_token": {
+        "n": 29,
+        "flagged_pct": 0.0,
+        "blocked_pct": 0.0,
+        "truth": "bad"
+      },
+      "rogue_issuer": {
+        "n": 19,
+        "flagged_pct": 0.0,
+        "blocked_pct": 0.0,
+        "truth": "bad"
+      },
+      "_summary": {
+        "attack_detection_pct": 28.0,
+        "attack_blocked_pct": 26.1,
+        "false_alarm_pct_on_genuine": 2.0,
+        "false_block_pct_on_genuine": 1.0
+      }
+    },
+    "cv_only": {
+      "genuine_unsigned": {
+        "n": 60,
+        "flagged_pct": 5.0,
+        "blocked_pct": 0.0,
+        "truth": "good"
+      },
+      "genuine_signed": {
+        "n": 39,
+        "flagged_pct": 10.3,
+        "blocked_pct": 0.0,
+        "truth": "good"
+      },
+      "phishing_url": {
+        "n": 59,
+        "flagged_pct": 6.8,
+        "blocked_pct": 0.0,
+        "truth": "bad"
+      },
+      "sticker_over_unsigned": {
+        "n": 60,
+        "flagged_pct": 53.3,
+        "blocked_pct": 0.0,
+        "truth": "bad"
+      },
+      "sticker_over_signed": {
+        "n": 40,
+        "flagged_pct": 60.0,
+        "blocked_pct": 0.0,
+        "truth": "bad"
+      },
+      "forged_token": {
+        "n": 29,
+        "flagged_pct": 0.0,
+        "blocked_pct": 0.0,
+        "truth": "bad"
+      },
+      "rogue_issuer": {
+        "n": 19,
+        "flagged_pct": 10.5,
+        "blocked_pct": 0.0,
+        "truth": "bad"
+      },
+      "_summary": {
+        "attack_detection_pct": 30.0,
+        "attack_blocked_pct": 0.0,
+        "false_alarm_pct_on_genuine": 7.1,
+        "false_block_pct_on_genuine": 0.0
+      }
+    },
+    "crypto_only": {
+      "genuine_unsigned": {
+        "n": 60,
+        "flagged_pct": 0.0,
+        "blocked_pct": 0.0,
+        "truth": "good"
+      },
+      "genuine_signed": {
+        "n": 39,
+        "flagged_pct": 0.0,
+        "blocked_pct": 0.0,
+        "truth": "good"
+      },
+      "phishing_url": {
+        "n": 59,
+        "flagged_pct": 0.0,
+        "blocked_pct": 0.0,
+        "truth": "bad"
+      },
+      "sticker_over_unsigned": {
+        "n": 60,
+        "flagged_pct": 0.0,
+        "blocked_pct": 0.0,
+        "truth": "bad"
+      },
+      "sticker_over_signed": {
+        "n": 40,
+        "flagged_pct": 0.0,
+        "blocked_pct": 0.0,
+        "truth": "bad"
+      },
+      "forged_token": {
+        "n": 29,
+        "flagged_pct": 100.0,
+        "blocked_pct": 100.0,
+        "truth": "bad"
+      },
+      "rogue_issuer": {
+        "n": 19,
+        "flagged_pct": 100.0,
+        "blocked_pct": 100.0,
+        "truth": "bad"
+      },
+      "_summary": {
+        "attack_detection_pct": 23.2,
+        "attack_blocked_pct": 23.2,
+        "false_alarm_pct_on_genuine": 0.0,
+        "false_block_pct_on_genuine": 0.0
+      }
+    },
+    "url+cv": {
+      "genuine_unsigned": {
+        "n": 60,
+        "flagged_pct": 8.3,
+        "blocked_pct": 1.7,
+        "truth": "good"
+      },
+      "genuine_signed": {
+        "n": 39,
+        "flagged_pct": 10.3,
+        "blocked_pct": 0.0,
+        "truth": "good"
+      },
+      "phishing_url": {
+        "n": 59,
+        "flagged_pct": 93.2,
+        "blocked_pct": 91.5,
+        "truth": "bad"
+      },
+      "sticker_over_unsigned": {
+        "n": 60,
+        "flagged_pct": 56.7,
+        "blocked_pct": 1.7,
+        "truth": "bad"
+      },
+      "sticker_over_signed": {
+        "n": 40,
+        "flagged_pct": 60.0,
+        "blocked_pct": 0.0,
+        "truth": "bad"
+      },
+      "forged_token": {
+        "n": 29,
+        "flagged_pct": 0.0,
+        "blocked_pct": 0.0,
+        "truth": "bad"
+      },
+      "rogue_issuer": {
+        "n": 19,
+        "flagged_pct": 10.5,
+        "blocked_pct": 0.0,
+        "truth": "bad"
+      },
+      "_summary": {
+        "attack_detection_pct": 55.6,
+        "attack_blocked_pct": 26.6,
+        "false_alarm_pct_on_genuine": 9.1,
+        "false_block_pct_on_genuine": 1.0
+      }
+    },
+    "url+crypto": {
+      "genuine_unsigned": {
+        "n": 60,
+        "flagged_pct": 3.3,
+        "blocked_pct": 1.7,
+        "truth": "good"
+      },
+      "genuine_signed": {
+        "n": 39,
+        "flagged_pct": 0.0,
+        "blocked_pct": 0.0,
+        "truth": "good"
+      },
+      "phishing_url": {
+        "n": 59,
+        "flagged_pct": 93.2,
+        "blocked_pct": 91.5,
+        "truth": "bad"
+      },
+      "sticker_over_unsigned": {
+        "n": 60,
+        "flagged_pct": 5.0,
+        "blocked_pct": 0.0,
+        "truth": "bad"
+      },
+      "sticker_over_signed": {
+        "n": 40,
+        "flagged_pct": 0.0,
+        "blocked_pct": 0.0,
+        "truth": "bad"
+      },
+      "forged_token": {
+        "n": 29,
+        "flagged_pct": 100.0,
+        "blocked_pct": 100.0,
+        "truth": "bad"
+      },
+      "rogue_issuer": {
+        "n": 19,
+        "flagged_pct": 100.0,
+        "blocked_pct": 100.0,
+        "truth": "bad"
+      },
+      "_summary": {
+        "attack_detection_pct": 51.2,
+        "attack_blocked_pct": 49.3,
+        "false_alarm_pct_on_genuine": 2.0,
+        "false_block_pct_on_genuine": 1.0
+      }
+    },
+    "cv+crypto": {
+      "genuine_unsigned": {
+        "n": 60,
+        "flagged_pct": 5.0,
+        "blocked_pct": 0.0,
+        "truth": "good"
+      },
+      "genuine_signed": {
+        "n": 39,
+        "flagged_pct": 7.7,
+        "blocked_pct": 0.0,
+        "truth": "good"
+      },
+      "phishing_url": {
+        "n": 59,
+        "flagged_pct": 6.8,
+        "blocked_pct": 0.0,
+        "truth": "bad"
+      },
+      "sticker_over_unsigned": {
+        "n": 60,
+        "flagged_pct": 53.3,
+        "blocked_pct": 0.0,
+        "truth": "bad"
+      },
+      "sticker_over_signed": {
+        "n": 40,
+        "flagged_pct": 60.0,
+        "blocked_pct": 0.0,
+        "truth": "bad"
+      },
+      "forged_token": {
+        "n": 29,
+        "flagged_pct": 100.0,
+        "blocked_pct": 100.0,
+        "truth": "bad"
+      },
+      "rogue_issuer": {
+        "n": 19,
+        "flagged_pct": 100.0,
+        "blocked_pct": 100.0,
+        "truth": "bad"
+      },
+      "_summary": {
+        "attack_detection_pct": 52.2,
+        "attack_blocked_pct": 23.2,
+        "false_alarm_pct_on_genuine": 6.1,
+        "false_block_pct_on_genuine": 0.0
+      }
+    },
+    "all_three": {
+      "genuine_unsigned": {
+        "n": 60,
+        "flagged_pct": 8.3,
+        "blocked_pct": 1.7,
+        "truth": "good"
+      },
+      "genuine_signed": {
+        "n": 39,
+        "flagged_pct": 7.7,
+        "blocked_pct": 0.0,
+        "truth": "good"
+      },
+      "phishing_url": {
+        "n": 59,
+        "flagged_pct": 93.2,
+        "blocked_pct": 91.5,
+        "truth": "bad"
+      },
+      "sticker_over_unsigned": {
+        "n": 60,
+        "flagged_pct": 56.7,
+        "blocked_pct": 1.7,
+        "truth": "bad"
+      },
+      "sticker_over_signed": {
+        "n": 40,
+        "flagged_pct": 60.0,
+        "blocked_pct": 0.0,
+        "truth": "bad"
+      },
+      "forged_token": {
+        "n": 29,
+        "flagged_pct": 100.0,
+        "blocked_pct": 100.0,
+        "truth": "bad"
+      },
+      "rogue_issuer": {
+        "n": 19,
+        "flagged_pct": 100.0,
+        "blocked_pct": 100.0,
+        "truth": "bad"
+      },
+      "_summary": {
+        "attack_detection_pct": 77.8,
+        "attack_blocked_pct": 49.8,
+        "false_alarm_pct_on_genuine": 8.1,
+        "false_block_pct_on_genuine": 1.0
+      }
+    }
+  },
+  "verdicts_all_three": {
+    "genuine_unsigned": {
+      "SAFE": 55,
+      "SUSPICIOUS": 4,
+      "BLOCK": 1
+    },
+    "genuine_signed": {
+      "SAFE": 36,
+      "SUSPICIOUS": 3,
+      "BLOCK": 0
+    },
+    "phishing_url": {
+      "SAFE": 4,
+      "SUSPICIOUS": 1,
+      "BLOCK": 54
+    },
+    "sticker_over_unsigned": {
+      "SAFE": 26,
+      "SUSPICIOUS": 33,
+      "BLOCK": 1
+    },
+    "sticker_over_signed": {
+      "SAFE": 16,
+      "SUSPICIOUS": 24,
+      "BLOCK": 0
+    },
+    "forged_token": {
+      "SAFE": 0,
+      "SUSPICIOUS": 0,
+      "BLOCK": 29
+    },
+    "rogue_issuer": {
+      "SAFE": 0,
+      "SUSPICIOUS": 0,
+      "BLOCK": 19
+    }
+  },
+  "latency_ms": {
+    "p50": 97.4,
+    "p95": 112.9,
+    "max": 273.9
+  }
+}

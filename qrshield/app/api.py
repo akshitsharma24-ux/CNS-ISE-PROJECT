@@ -1,365 +1,383 @@
 """
-QRshield Main Application and FastAPI Endpoints (M5).
-Provides:
-  - POST /api/scan (Image upload, M0 decode, parallel layer checks, M4 fusion)
-  - POST /api/report (Quishing & false positive feedback reporting)
-  - GET /api/reports (Admin review queue)
-  - POST /api/reports/{id}/review (Admin approve/reject)
-  - POST /api/generate-signed-qr (Issuer portal generation tool)
-  - Static frontend delivery
+QRshield web API and single-page app (M5).
+
+    uvicorn qrshield.app.api:app            # `app` is created lazily on first access
+    create_app(home=...)                    # isolated instance (used by the tests)
+
+Public routes   : /api/health, /api/scan, /api/check, /api/report, /api/registry/{root,crl,issuers,...},
+                  /api/demo/*
+Admin routes    : /api/admin/*   (header X-Admin-Token)
 """
-import os
+from __future__ import annotations
+
+import base64
+import hashlib
 import io
+import json
+import logging
+import os
 import time
 import uuid
-import hashlib
-import cv2
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Any, Dict, Literal, Optional
+
 import numpy as np
-from typing import Optional, List
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Response
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 import qrcode
-from PIL import Image
+from fastapi import APIRouter, Depends, FastAPI, File, HTTPException, Query, Request, Response, UploadFile
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
-
+import qrshield
+from qrshield import config, model_store, retrain
+from qrshield.app import demo
+from qrshield.app.security import RateLimiter, SecurityHeaders, limit, read_upload, require_admin
 from qrshield.capture import capture_and_decode
-from qrshield.url_layer import analyze as analyze_url
+from qrshield.crypto_layer import TrustStore, verify as verify_crypto
 from qrshield.cv_layer import analyze as analyze_cv
-from qrshield.crypto_layer import verify as verify_crypto, sign_url_token, load_private_key_b64
 from qrshield.engine import decide
-from qrshield.registry.api import registry_router
-from qrshield.registry.admin import (
-    sync_all_certificates_to_verifier,
-    SessionLocal,
-    IssuerRecord,
-    ScanReport
-)
+from qrshield.registry import Registry, RegistryError
+from qrshield.url_layer import analyze as analyze_url
 
-app = FastAPI(
-    title="QRshield: Quishing & Tamper Detection Platform",
-    description="Three-layer detector: URL ML + CV Physical Tamper + Ed25519 Signed QR",
-    version="1.0.0"
-)
 
-# Enable CORS for cross-device mobile testing
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+def _py(obj: Any) -> Any:
+    """Recursively convert numpy scalars/arrays so the response is plain JSON."""
+    if isinstance(obj, dict):
+        return {str(k): _py(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        return [_py(v) for v in obj]
+    if isinstance(obj, np.generic):
+        return obj.item()
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    return obj
 
-# Include registry router
-app.include_router(registry_router)
 
-# Mount static directory for single-page app
-STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
-if not os.path.exists(STATIC_DIR):
-    os.makedirs(STATIC_DIR, exist_ok=True)
+# ----------------------------------------------------------------------------- request models
+class CheckRequest(BaseModel):
+    payload: str = Field(min_length=1, max_length=config.MAX_PAYLOAD_CHARS)
 
-@app.on_event("startup")
-def startup_event():
-    """Initializes database and caches certificates on application boot."""
-    sync_all_certificates_to_verifier()
 
-@app.post("/api/scan")
-async def api_scan(
-    image: UploadFile = File(...),
-    image2: Optional[UploadFile] = File(None)
-):
-    """
-    Main Scan Pipeline:
-    1. M0: Decodes QR, assesses blur/glare/quality, detects stacked codes.
-    2. Runs M1 (URL ML), M2 (CV Tamper), M3 (Crypto) in coordinated pipeline.
-    3. M4: Fuses all signals with rule-first noisy-OR aggregation.
-    """
-    start_time = time.time()
-    img_bytes = await image.read()
-    if not img_bytes:
-        raise HTTPException(status_code=400, detail="Empty image uploaded")
+class ReportRequest(BaseModel):
+    scan_id: Optional[str] = Field(None, max_length=64)
+    payload: str = Field(min_length=1, max_length=config.MAX_PAYLOAD_CHARS)
+    user_label: Literal["phishing", "benign", "tampered"]
+    note: str = Field("", max_length=config.MAX_NOTE_CHARS)
+    verdict: Optional[Literal["SAFE", "SUSPICIOUS", "BLOCK"]] = None
 
-    img2_bytes = None
-    if image2 is not None:
-        img2_bytes = await image2.read()
 
-    # Step 1: M0 Capture & Decode
-    m0_res = capture_and_decode(img_bytes)
-    if not m0_res["success"]:
-        return JSONResponse(status_code=200, content={
-            "success": False,
-            "error": m0_res["error"],
-            "quality": m0_res["quality"],
-            "elapsed_ms": round((time.time() - start_time) * 1000, 1)
-        })
+class ReviewRequest(BaseModel):
+    action: Literal["approve", "reject"]
 
-    payload = m0_res["payload"]
-    payload_type = m0_res["payload_type"]
 
-    # Step 2: Layer Analysis
-    # M1 URL / Payload ML
-    url_res = analyze_url(payload, offline=True)
+class RevokeRequest(BaseModel):
+    reason: str = Field("key compromised", max_length=200)
 
-    # M2 Visual Tamper Detection (pass image bytes & optional second angle)
-    cv_res = analyze_cv(img_bytes, img2=img2_bytes)
 
-    # If multi-code stacked sticker flagged by M0, inject into CV signals
-    if m0_res.get("multi_code"):
-        cv_res["score"] = max(cv_res["score"], 0.88)
-        cv_res["signals"].append({
-            "name": "stacked_code_pattern",
-            "value": True,
-            "text": m0_res.get("multi_code_details", "Multiple overlapping QR modules detected.")
-        })
+class IssuerRequest(BaseModel):
+    issuer_id: str = Field(min_length=2, max_length=63)
+    name: str = Field(min_length=2, max_length=128)
+    domain: str = Field(min_length=3, max_length=253)
+    public_key_b64: Optional[str] = Field(None, max_length=64, description="Omit to let the registry generate and hold the key (demo custody)")
 
-    # M3 Crypto Layer Verification
-    sig_res = verify_crypto(payload)
 
-    # Step 3: M4 Aggregation Engine
-    decision = decide(url_res, cv_res, sig_res)
+class SignRequest(BaseModel):
+    issuer_id: str = Field(min_length=2, max_length=63)
+    url: str = Field(min_length=8, max_length=1500)
+    location_id: str = Field("counter-01", min_length=1, max_length=48)
+    validity_hours: int = Field(48, ge=0, le=43800, description="0 = never expires")
 
-    scan_id = str(uuid.uuid4())
-    total_time = round((time.time() - start_time) * 1000, 1)
 
+class VerifyRequest(BaseModel):
+    payload: str = Field(min_length=1, max_length=config.MAX_PAYLOAD_CHARS)
+
+
+# ----------------------------------------------------------------------------- helpers
+def _qr_png_data_uri(text: str, box: int = 10) -> str:
+    qr = qrcode.QRCode(version=None, error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=box, border=4)
+    qr.add_data(text)
+    qr.make(fit=True)
+    buf = io.BytesIO()
+    qr.make_image(fill_color="black", back_color="white").save(buf, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+log = logging.getLogger("qrshield")
+
+
+def _timed(timings: Dict[str, float], name: str, fn, *args, **kwargs):
+    t = time.perf_counter()
+    out = fn(*args, **kwargs)
+    timings[name] = round((time.perf_counter() - t) * 1000, 1)
+    return out
+
+
+def _guarded(timings: Dict[str, float], name: str, fn, fallback, *args, **kwargs):
+    """Run one layer; if it ever crashes, degrade *conservatively* instead of failing the whole scan."""
+    try:
+        return _timed(timings, name, fn, *args, **kwargs)
+    except Exception:
+        log.exception("layer %s failed", name)
+        timings[name] = -1.0
+        return fallback
+
+
+def _layers(url_res, cv_res, sig_res) -> Dict[str, Any]:
     return {
-        "success": True,
-        "scan_id": scan_id,
-        "payload": payload,
-        "payload_type": payload_type,
-        "quality": m0_res["quality"],
-        "decision": decision,
-        "layers": {
-            "url_layer": {
-                "score": url_res["score"],
-                "signals": url_res["signals"],
-                "type": url_res["payload_type"]
-            },
-            "cv_layer": {
-                "score": cv_res["score"],
-                "status": cv_res["status"],
-                "signals": cv_res["signals"],
-                "heatmap_png_b64": cv_res.get("heatmap_png_b64")
-            },
-            "crypto_layer": {
-                "status": sig_res["status"],
-                "issuer": sig_res["issuer"]
-            }
-        },
-        "elapsed_ms": total_time
+        "url_layer": {"score": url_res["score"], "type": url_res["payload_type"], "signals": url_res["signals"],
+                      "details": url_res.get("details", {})},
+        "cv_layer": {"score": cv_res["score"], "status": cv_res["status"], "signals": cv_res["signals"],
+                     "heatmap_png_b64": cv_res.get("heatmap_png_b64"), "details": cv_res.get("details", {})},
+        "crypto_layer": {"status": sig_res["status"], "issuer": sig_res.get("issuer"), "detail": sig_res.get("detail", "")},
     }
 
-class ReportSubmission(BaseModel):
-    scan_id: Optional[str] = None
-    payload: str
-    user_label: str  # 'phishing' | 'benign' | 'tampered'
-    note: Optional[str] = ""
 
-@app.post("/api/report")
-def api_submit_report(rep: ReportSubmission):
-    """
-    Submits feedback report (F34) into SQLite review queue.
-    Hashes payload with SHA-256 for privacy compliance.
-    """
-    db = SessionLocal()
+def run_scan(registry: Registry, img_bytes: bytes, img2_bytes: Optional[bytes]) -> Dict[str, Any]:
+    """The full pipeline: M0 decode -> M1/M2/M3 -> M4 fusion."""
+    timings: Dict[str, float] = {}
+    t0 = time.perf_counter()
+    m0 = _timed(timings, "decode", capture_and_decode, img_bytes)
+    if not m0["success"]:
+        return {"success": False, "error": m0["error"], "quality": m0["quality"],
+                "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1)}
+    payload = m0["payload"]
+    url_res = _guarded(timings, "url", analyze_url, {
+        "score": 0.55, "payload_type": m0["payload_type"] if m0["payload_type"] in ("url", "upi") else "other",
+        "signals": [{"name": "layer_failed", "value": None, "direction": "risk",
+                     "text": "The link could not be analysed, so it is treated with caution."}], "details": {}}, payload)
+    cv_res = _guarded(timings, "visual", analyze_cv, {
+        "score": 0.0, "status": "low_quality", "heatmap_png_b64": None, "details": {},
+        "signals": [{"name": "layer_failed", "value": None, "direction": "info", "text": "The visual check failed on this photo."}]},
+        m0["image"], img2_bytes, m0["corners_np"])
+    if m0["multi_code"] and not any(s["name"] == "stacked_code_pattern" for s in cv_res["signals"]):
+        cv_res["signals"].insert(0, {"name": "stacked_code_pattern", "value": True, "direction": "risk",
+                                     "text": m0.get("multi_code_details") or "Two QR patterns overlap in the frame."})
+        cv_res["score"] = max(cv_res["score"], 0.88)
+    sig_res = _guarded(timings, "crypto", verify_crypto, {
+        "status": "invalid" if "qrs=" in payload else "none", "issuer": None, "detail": "verification error - treated as failed"},
+        payload, registry.store)
+    decision = _timed(timings, "engine", decide, url_res, cv_res, sig_res)
+
+    scan_id = str(uuid.uuid4())
+    total = round((time.perf_counter() - t0) * 1000, 1)
     try:
-        payload_hash = hashlib.sha256(rep.payload.encode("utf-8")).hexdigest()
-        report_id = str(uuid.uuid4())
-        rec = ScanReport(
-            report_id=report_id,
-            payload_hash=payload_hash,
-            url=rep.payload,
-            user_label=rep.user_label,
-            note=rep.note,
-            status="pending"
-        )
-        db.add(rec)
-        db.commit()
-        return {"success": True, "report_id": report_id, "message": "Feedback submitted for admin review."}
-    finally:
-        db.close()
-
-@app.get("/api/reports")
-def api_list_reports():
-    """Admin endpoint to retrieve reported cases (F34)."""
-    db = SessionLocal()
-    try:
-        rows = db.query(ScanReport).order_by(ScanReport.created_at.desc()).all()
-        return [{
-            "report_id": r.report_id,
-            "url": r.url,
-            "user_label": r.user_label,
-            "note": r.note,
-            "created_at": r.created_at,
-            "status": r.status
-        } for r in rows]
-    finally:
-        db.close()
-
-class ReviewAction(BaseModel):
-    action: str  # 'approve' | 'reject'
-
-@app.post("/api/reports/{report_id}/review")
-def api_review_report(report_id: str, action: ReviewAction):
-    """Admin human-gate action approving or rejecting reported URL (F35)."""
-    db = SessionLocal()
-    try:
-        rec = db.query(ScanReport).filter_by(report_id=report_id).first()
-        if not rec:
-            raise HTTPException(status_code=404, detail="Report not found")
-        rec.status = "approved" if action.action == "approve" else "rejected"
-        db.commit()
-        return {"success": True, "status": rec.status}
-    finally:
-        db.close()
-
-class GenerateQRRequest(BaseModel):
-    url: str
-    issuer_id: str
-    issuer_private_key_b64: str
-    location_id: Optional[str] = "counter-01"
-    validity_hours: Optional[int] = 24
-
-@app.post("/api/generate-signed-qr")
-def api_generate_signed_qr(req: GenerateQRRequest):
-    """
-    Issuer Portal API (F27): Signs a business URL with Ed25519
-    and returns a downloadable QR PNG image base64.
-    """
-    try:
-        priv_key = load_private_key_b64(req.issuer_private_key_b64)
-        now = int(time.time())
-        exp = now + (req.validity_hours * 3600)
-
-        signed_url, token = sign_url_token(
-            url=req.url,
-            private_key=priv_key,
-            issuer_id=req.issuer_id,
-            key_id="key-1",
-            location_id=req.location_id,
-            iat=now,
-            exp=exp
-        )
-
-        # Generate QR PNG with Error Correction Level M
-        qr = qrcode.QRCode(
-            version=None,
-            error_correction=qrcode.constants.ERROR_CORRECT_M,
-            box_size=10,
-            border=4
-        )
-        qr.add_data(signed_url)
-        qr.make(fit=True)
-        img = qr.make_image(fill_color="black", back_color="white")
-
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        png_bytes = buf.getvalue()
-
-        import base64
-        b64_qr = base64.b64encode(png_bytes).decode("ascii")
-
-        return {
-            "success": True,
-            "signed_url": signed_url,
-            "token": token,
-            "qr_png_base64": f"data:image/png;base64,{b64_qr}"
-        }
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-@app.get("/api/demo/render-qr")
-def api_demo_render_qr(text: str):
-    """Utility to generate a QR PNG image for arbitrary text/URL for instant testing."""
-    if not text or not text.strip():
-        raise HTTPException(status_code=400, detail="Text cannot be empty")
-    qr = qrcode.QRCode(box_size=8, border=4)
-    qr.add_data(text.strip())
-    qr.make(fit=True)
-    img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return Response(content=buf.getvalue(), media_type="image/png")
-
-@app.get("/api/demo/scenario-image/{num}")
-def api_demo_scenario_image(num: int):
-    """Generates synthetic and realistic images for the 6 demo scenarios in Section 13."""
-    from scripts.seed_registry import CITYPARK_PRIV_B64
-    from qrshield.crypto_layer.token import sign_url_token
-
-    def _render_qr(data: str) -> np.ndarray:
-        qr = qrcode.QRCode(box_size=8, border=4)
-        qr.add_data(data)
-        qr.make(fit=True)
-        img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
-        return cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-
-    def _create_canvas(qr_bgr, bg_color=255):
-        h, w = qr_bgr.shape[:2]
-        pad = max(60, int(w * 0.25))
-        canvas = np.ones((h + pad * 2, w + pad * 2, 3), dtype=np.uint8) * bg_color
-        canvas[pad:pad+h, pad:pad+w] = qr_bgr
-        return canvas, pad, pad, h, w
-
-    if num == 1:
-        # Scenario 1: Clean Unsigned College Website
-        qr_bgr = _render_qr("https://spit.ac.in/departments/comps")
-        canvas, _, _, _, _ = _create_canvas(qr_bgr, 255)
-    elif num == 2:
-        # Scenario 2: Fresh Phishing-Style QR (Lookalike Brand)
-        qr_bgr = _render_qr("https://secure-phonepe-refund.xyz/claim-cashback?amt=2000")
-        canvas, _, _, _, _ = _create_canvas(qr_bgr, 255)
-    elif num == 3:
-        # Scenario 3: Signed City Parking Code (Valid Ed25519)
-        priv = load_private_key_b64(CITYPARK_PRIV_B64)
-        now = int(time.time())
-        signed_url, _ = sign_url_token(
-            url="https://pay.citypark.example/m/42",
-            private_key=priv,
-            issuer_id="citypark-01",
-            key_id="key-1",
-            location_id="andheri-counter-04",
-            iat=now,
-            exp=now + 86400
-        )
-        qr_bgr = _render_qr(signed_url)
-        canvas, _, _, _, _ = _create_canvas(qr_bgr, 255)
-    elif num == 4:
-        # Scenario 4: Physical Sticker Swap (Clean URL pasted over Parking Meter)
-        qr_bgr = _render_qr("https://citypark.example/m/42")
-        # Wooden/metallic backing surface
-        canvas, pad_x, pad_y, h, w = _create_canvas(qr_bgr, 180)
-        # Draw physical sticker backing with distinct paper color and shadow
-        cv2.rectangle(canvas, (pad_x - 14, pad_y - 14), (pad_x + w + 16, pad_y + h + 16), (70, 70, 70), -1)  # micro-shadow
-        cv2.rectangle(canvas, (pad_x - 12, pad_y - 12), (pad_x + w + 12, pad_y + h + 12), (255, 255, 240), -1)  # sticker paper
-        canvas[pad_y:pad_y+h, pad_x:pad_x+w] = qr_bgr
-    elif num == 5:
-        # Scenario 5: Forged-token QR (URL edited or invalid signature)
-        priv = load_private_key_b64(CITYPARK_PRIV_B64)
-        now = int(time.time())
-        signed_url, _ = sign_url_token(
-            url="https://pay.citypark.example/m/42",
-            private_key=priv,
-            issuer_id="citypark-01",
-            key_id="key-1",
-            iat=now,
-            exp=now + 86400
-        )
-        # Attacker tampered URL from /m/42 to /m/99
-        tampered_url = signed_url.replace("/m/42", "/m/99")
-        qr_bgr = _render_qr(tampered_url)
-        canvas, _, _, _, _ = _create_canvas(qr_bgr, 255)
-    else:
-        # Scenario 6: Sample for feedback reporting
-        qr_bgr = _render_qr("https://paytm-kyc-update.top/wallet/kyc-verification.php")
-        canvas, _, _, _, _ = _create_canvas(qr_bgr, 255)
-
-    _, encoded = cv2.imencode(".png", canvas)
-    return Response(content=encoded.tobytes(), media_type="image/png")
+        registry.log_scan(scan_id=scan_id, payload_hash=hashlib.sha256(payload.encode()).hexdigest(),
+                          payload_type=url_res["payload_type"], verdict=decision["verdict"], risk=decision["risk"],
+                          url_risk=url_res["score"], tamper_risk=cv_res["score"], sig_status=sig_res["status"], elapsed_ms=total)
+    except Exception:
+        pass                                              # telemetry must never break a scan
+    return _py({
+        "success": True, "scan_id": scan_id, "payload": payload, "payload_type": m0["payload_type"],
+        "quality": m0["quality"], "codes_in_frame": m0["codes"], "decision": decision,
+        "layers": _layers(url_res, cv_res, sig_res), "timings_ms": timings, "elapsed_ms": total,
+        "models": {"url": model_store.active_version("url"), "cv": model_store.active_version("cv")},
+    })
 
 
-# Mount static files for the single page web application
-app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
+def run_check(registry: Registry, payload: str) -> Dict[str, Any]:
+    """Text-only check (no photo): M1 + M3 + M4. The visual layer reports 'not_applicable'."""
+    timings: Dict[str, float] = {}
+    t0 = time.perf_counter()
+    url_res = _guarded(timings, "url", analyze_url, {
+        "score": 0.55, "payload_type": "other", "details": {},
+        "signals": [{"name": "layer_failed", "value": None, "direction": "risk", "text": "The link could not be analysed, so it is treated with caution."}]}, payload)
+    cv_res = {"score": 0.0, "status": "not_applicable", "signals": [], "heatmap_png_b64": None, "details": {}}
+    sig_res = _guarded(timings, "crypto", verify_crypto, {
+        "status": "invalid" if "qrs=" in payload else "none", "issuer": None, "detail": "verification error - treated as failed"},
+        payload, registry.store)
+    decision = _timed(timings, "engine", decide, url_res, cv_res, sig_res)
+    from qrshield.capture.payload_types import parse_payload_type
+    return _py({
+        "success": True, "scan_id": str(uuid.uuid4()), "payload": payload, "payload_type": parse_payload_type(payload)[0],
+        "quality": None, "codes_in_frame": [], "decision": decision, "layers": _layers(url_res, cv_res, sig_res),
+        "timings_ms": timings, "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1), "text_only": True,
+        "models": {"url": model_store.active_version("url"), "cv": model_store.active_version("cv")},
+    })
 
+
+# ----------------------------------------------------------------------------- app factory
+def create_app(home: Optional[Path] = None, seed_demo: bool = True, trust_store: Optional[TrustStore] = None) -> FastAPI:
+    registry = Registry(home=home, trust_store=trust_store)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        registry.ensure_ready(seed_demo=seed_demo)
+        if not os.environ.get("QRSHIELD_ADMIN_TOKEN"):
+            print(f"\n  QRshield admin token (Issuer Portal / Admin Queue): {registry.admin_token()}\n"
+                  f"  (also stored in {registry.home / 'admin_token'})\n", flush=True)
+        yield
+        registry.close()
+
+    app = FastAPI(title="QRshield", version=qrshield.__version__, lifespan=lifespan,
+                  description="Scan, verify, then decide: URL ML + visual tamper detection + Ed25519 signed QR codes.")
+    app.state.registry = registry
+    app.state.limiter = RateLimiter()
+    app.add_middleware(SecurityHeaders)
+
+    @app.exception_handler(RegistryError)
+    async def _registry_error(_: Request, exc: RegistryError):
+        return JSONResponse(status_code=exc.status, content={"detail": str(exc)})
+
+    api = APIRouter(prefix="/api")
+
+    # ------------------------------------------------------------------ public
+    @api.get("/health")
+    def health():
+        crl = registry.current_crl()
+        return {"status": "ok", "version": qrshield.__version__,
+                "models": {"url": model_store.active_version("url"), "cv": model_store.active_version("cv")},
+                "root_public_key": registry.root_public_key_b64, "crl_version": crl["version"],
+                "secure_context_hint": "Phone cameras need HTTPS; run `python -m qrshield serve --https`."}
+
+    @api.post("/scan", dependencies=[limit("scan", 40)])
+    async def scan(image: UploadFile = File(...), image2: Optional[UploadFile] = File(None)):
+        data = await read_upload(image)
+        if not data:
+            raise HTTPException(status_code=400, detail="Empty image upload.")
+        data2 = await read_upload(image2)
+        return await run_in_threadpool(run_scan, registry, data, data2 or None)
+
+    @api.post("/check", dependencies=[limit("check", 120)])
+    async def check(req: CheckRequest):
+        return await run_in_threadpool(run_check, registry, req.payload.strip())
+
+    @api.post("/report", dependencies=[limit("report", 12)])
+    def report(req: ReportRequest):
+        rid = registry.add_report(req.payload, req.user_label, req.note, req.verdict)
+        return {"success": True, "report_id": rid, "message": "Thanks - your report is queued for human review."}
+
+    @api.get("/results")
+    def results():
+        """Measured evaluation results (generated by `make evaluate`; nothing here is hand-written)."""
+        out: Dict[str, Any] = {}
+        for key, name in (("url", "url_metrics.json"), ("cv", "cv_metrics.json"), ("system", "system_metrics.json")):
+            path = config.REPO_ROOT / "docs" / "results" / name
+            if path.exists():
+                out[key] = json.loads(path.read_text(encoding="utf-8"))
+        return out
+
+    @api.get("/registry/root")
+    def registry_root():
+        return {"public_key": registry.root_public_key_b64, "algorithm": "Ed25519",
+                "note": "In a real deployment this key is pinned inside the app, not fetched."}
+
+    @api.get("/registry/crl")
+    def registry_crl():
+        return registry.current_crl()
+
+    @api.get("/registry/issuers")
+    def registry_issuers():
+        return [{k: i[k] for k in ("issuer_id", "name", "domain", "key_id", "is_revoked", "cert_valid_to")} for i in registry.list_issuers()]
+
+    @api.get("/registry/issuers/{issuer_id}/cert")
+    def registry_cert(issuer_id: str):
+        cert = registry.get_certificate(issuer_id)
+        if not cert:
+            raise HTTPException(status_code=404, detail="Issuer not found")
+        return cert
+
+    @api.post("/registry/verify", dependencies=[limit("verify", 120)])
+    def registry_verify(req: VerifyRequest):
+        return verify_crypto(req.payload, registry.store)
+
+    @api.get("/demo/scenarios")
+    def demo_scenarios():
+        return demo.SCENARIOS
+
+    @api.get("/demo/scenario-image/{n}", dependencies=[limit("demo", 60)])
+    async def demo_image(n: int):
+        if not 1 <= n <= 6:
+            raise HTTPException(status_code=404, detail="Scenario must be 1-6")
+        data = await run_in_threadpool(demo.scenario_image, registry, n)
+        return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+    @api.get("/demo/render-qr", dependencies=[limit("demo", 60)])
+    def demo_render_qr(text: str = Query(min_length=1, max_length=config.MAX_PAYLOAD_CHARS)):
+        data_uri = _qr_png_data_uri(text.strip(), box=8)
+        return Response(content=base64.b64decode(data_uri.split(",", 1)[1]), media_type="image/png")
+
+    # ------------------------------------------------------------------ admin
+    admin = APIRouter(prefix="/admin", dependencies=[Depends(require_admin)])
+
+    @admin.get("/session")
+    def admin_session():
+        return {"ok": True}
+
+    @admin.get("/overview")
+    def admin_overview():
+        return {"stats": registry.stats(), "issuers": registry.list_issuers(), "crl": registry.current_crl(),
+                "models": {"url": model_store.active_version("url"), "cv": model_store.active_version("cv")}}
+
+    @admin.post("/issuers")
+    def admin_register(req: IssuerRequest):
+        cert = registry.register_issuer(req.issuer_id, req.name, req.domain, req.public_key_b64)
+        return {"success": True, "certificate": cert}
+
+    @admin.post("/issuers/{issuer_id}/revoke")
+    def admin_revoke(issuer_id: str, req: RevokeRequest):
+        crl = registry.revoke_issuer(issuer_id, req.reason)
+        return {"success": True, "crl_version": crl["version"], "message": f"'{issuer_id}' revoked."}
+
+    @admin.post("/issuers/{issuer_id}/restore")
+    def admin_restore(issuer_id: str):
+        crl = registry.restore_issuer(issuer_id)
+        return {"success": True, "crl_version": crl["version"], "message": f"'{issuer_id}' restored."}
+
+    @admin.post("/issuers/{issuer_id}/rotate")
+    def admin_rotate(issuer_id: str):
+        res = registry.rotate_issuer_key(issuer_id)
+        return {"success": True, "crl_version": res["crl_version"], "certificate": res["certificate"]}
+
+    @admin.post("/sign")
+    def admin_sign(req: SignRequest):
+        res = registry.sign_for_issuer(req.issuer_id, req.url, req.location_id, req.validity_hours)
+        verdict = verify_crypto(res["signed_url"], registry.store)
+        return {"success": True, "signed_url": res["signed_url"], "token": res["token"],
+                "qr_png_base64": _qr_png_data_uri(res["signed_url"]), "self_check": verdict["status"],
+                "payload_bytes": len(res["signed_url"].encode())}
+
+    @admin.get("/reports")
+    def admin_reports(status: Optional[Literal["pending", "approved", "rejected"]] = None):
+        return registry.list_reports(status)
+
+    @admin.post("/reports/{report_id}/review")
+    def admin_review(report_id: str, req: ReviewRequest):
+        return {"success": True, "status": registry.review_report(report_id, req.action)}
+
+    @admin.get("/models")
+    def admin_models():
+        return {"active": {"url": model_store.active_version("url"), "cv": model_store.active_version("cv")},
+                "history": registry.list_model_versions(), "retrain": retrain.status()}
+
+    @admin.post("/retrain")
+    def admin_retrain():
+        started = retrain.run_in_background(registry)
+        return {"success": True, "started": started, "message": "Retraining started." if started else "A retrain is already running."}
+
+    @admin.get("/audit")
+    def admin_audit():
+        return registry.audit_log()
+
+    @admin.post("/demo/reset")
+    def admin_demo_reset():
+        registry.reset_demo()
+        return {"success": True, "crl_version": registry.current_crl()["version"]}
+
+    api.include_router(admin)
+    app.include_router(api)
+
+    app.mount("/", StaticFiles(directory=str(config.STATIC_DIR), html=True), name="static")
+    return app
+
+
+def __getattr__(name: str):                      # `uvicorn qrshield.app.api:app` creates the app lazily
+    if name == "app":
+        global _APP
+        try:
+            return _APP
+        except NameError:
+            _APP = create_app()
+            return _APP
+    raise AttributeError(name)

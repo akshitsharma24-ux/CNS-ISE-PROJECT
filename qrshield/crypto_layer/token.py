@@ -1,65 +1,139 @@
 """
-Canonical URL Encoding and QR Token Serialization (F23, F25).
-Domain separation context: 'QRSHIELD-v1'.
-Graceful degradation: Normal scanners open clean URL while QRshield verifies token.
+Canonical URL encoding and the compact QR token (F23, F25).
+
+A signed QR is an ordinary URL with one extra query parameter, so any phone camera still
+opens the business URL (graceful degradation). QRshield additionally verifies the token.
+
+Token (binary, base64url in `?qrs=`; ~140 chars so the printed code stays easy to scan):
+
+    0x01 | iat u32 | exp u32 | len+iss | len+kid | len+loc | Ed25519 signature (64 B)
+
+Signed message (domain separated, NUL-delimited, never reusable in another protocol):
+
+    "QRSHIELD-v1" 00 canonical_url 00 iss 00 kid 00 loc 00 iat 00 exp
 """
-import json
-import base64
-from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
-from typing import Dict, Any, Tuple, Optional
+from __future__ import annotations
+
+import struct
+from typing import Any, Dict, Optional, Tuple
+from urllib.parse import parse_qsl, urlencode, urlunparse
+
 from cryptography.hazmat.primitives.asymmetric import ed25519
-from cryptography.exceptions import InvalidSignature
+
+from qrshield.crypto_layer.keys import b64u_decode, b64u_encode
+from qrshield.netutil import safe_urlparse
 
 DOMAIN_SEPARATOR = "QRSHIELD-v1"
+TOKEN_VERSION = 1
+TOKEN_PARAM = "qrs"
+MAX_FIELD = 64
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+class TokenError(ValueError):
+    """Raised for tokens/URLs that cannot be canonicalised, signed or parsed."""
+
 
 def canonicalize_url(url: str) -> str:
+    """Deterministic URL form shared by signer and verifier.
+
+    Lower-cases scheme and host, drops the default port and fragment, forces an explicit
+    path, strips the `qrs` parameter and sorts the remaining query. URLs carrying userinfo
+    (`user@host`) are rejected outright: it is the classic host-spoofing trick.
     """
-    Standardizes a URL for deterministic cryptographic signing/verification:
-    1. Strips any existing 'qrs' parameter.
-    2. Lowercases scheme and host.
-    3. Normalizes path (empty path -> '/').
-    4. Sorts all query parameters alphabetically by key.
-    5. Strips fragment (#...).
-    """
-    parsed = urlparse(url.strip())
+    parsed = safe_urlparse((url or "").strip())
+    if parsed is None or parsed.scheme.lower() not in ("http", "https"):
+        raise TokenError("only absolute http(s) URLs can be signed")
+    try:
+        host = (parsed.hostname or "").lower().rstrip(".")
+        port = parsed.port
+    except ValueError as exc:
+        raise TokenError(f"invalid host/port: {exc}") from exc
+    if not host:
+        raise TokenError("URL has no host")
+    if parsed.username is not None or parsed.password is not None:
+        raise TokenError("URLs with userinfo are not allowed")
+
     scheme = parsed.scheme.lower()
-    netloc = parsed.netloc.lower()
-    path = parsed.path or "/"
+    netloc = f"[{host}]" if ":" in host else host
+    if port is not None and port != _DEFAULT_PORTS[scheme]:
+        netloc = f"{netloc}:{port}"
+    query = sorted(
+        (k, v)
+        for k, v in parse_qsl(parsed.query, keep_blank_values=True)
+        if k.lower() != TOKEN_PARAM
+    )
+    return urlunparse((scheme, netloc, parsed.path or "/", "", urlencode(query), ""))
 
-    # Parse and filter query parameters
-    query_tuples = parse_qsl(parsed.query, keep_blank_values=True)
-    filtered = [(k, v) for k, v in query_tuples if k.lower() != "qrs"]
-    # Sort deterministically
-    sorted_params = sorted(filtered, key=lambda x: (x[0], x[1]))
-    new_query = urlencode(sorted_params)
-
-    # Reconstruct canonical URL (empty fragment)
-    canonical = urlunparse((scheme, netloc, path, "", new_query, ""))
-    return canonical
 
 def build_signature_message(
-    canonical_url: str,
-    issuer_id: str,
-    key_id: str,
-    location_id: str,
-    iat: int,
-    exp: int
+    canonical_url: str, issuer_id: str, key_id: str, location_id: str, iat: int, exp: int
 ) -> bytes:
-    """
-    Constructs the domain-separated canonical byte sequence for signing.
-    sig_payload = "QRSHIELD-v1" | canonical_url | iss | kid | loc | iat | exp
-    Delimited by null bytes (\x00) to prevent field ambiguity or injection.
-    """
-    parts = [
-        DOMAIN_SEPARATOR,
-        canonical_url,
-        str(issuer_id),
-        str(key_id),
-        str(location_id),
-        str(iat),
-        str(exp)
-    ]
+    for name, value in (("issuer", issuer_id), ("key id", key_id), ("location", location_id)):
+        if "\x00" in value:
+            raise TokenError(f"{name} must not contain NUL")
+    parts = [DOMAIN_SEPARATOR, canonical_url, issuer_id, key_id, location_id, str(int(iat)), str(int(exp))]
     return "\x00".join(parts).encode("utf-8")
+
+
+def _pack_field(value: str, name: str) -> bytes:
+    raw = value.encode("utf-8")
+    if not raw or len(raw) > MAX_FIELD:
+        raise TokenError(f"{name} must be 1-{MAX_FIELD} bytes")
+    return bytes([len(raw)]) + raw
+
+
+def pack_token(issuer_id: str, key_id: str, location_id: str, iat: int, exp: int, signature: bytes) -> str:
+    if len(signature) != 64:
+        raise TokenError("Ed25519 signatures are 64 bytes")
+    if not (0 <= iat < 2**32 and 0 <= exp < 2**32):
+        raise TokenError("timestamps must fit in 32 bits")
+    body = (
+        bytes([TOKEN_VERSION])
+        + struct.pack(">II", int(iat), int(exp))
+        + _pack_field(issuer_id, "issuer")
+        + _pack_field(key_id, "key id")
+        + _pack_field(location_id, "location")
+        + signature
+    )
+    return b64u_encode(body)
+
+
+def unpack_token(token_b64: str) -> Dict[str, Any]:
+    """Parse a token; raises TokenError on any structural problem."""
+    try:
+        raw = b64u_decode(token_b64)
+    except ValueError as exc:
+        raise TokenError("malformed base64") from exc
+    if len(raw) < 1 + 8 + 3 + 64:
+        raise TokenError("token too short")
+    version = raw[0]
+    if version != TOKEN_VERSION:
+        raise TokenError(f"unsupported token version {version}")
+    iat, exp = struct.unpack(">II", raw[1:9])
+    pos = 9
+    fields = []
+    for _ in range(3):
+        if pos >= len(raw):
+            raise TokenError("truncated token")
+        n = raw[pos]
+        pos += 1
+        chunk = raw[pos : pos + n]
+        if n == 0 or len(chunk) != n:
+            raise TokenError("truncated token field")
+        try:
+            fields.append(chunk.decode("utf-8"))
+        except UnicodeDecodeError as exc:
+            raise TokenError("non-UTF-8 field") from exc
+        pos += n
+    signature = raw[pos:]
+    if len(signature) != 64:
+        raise TokenError("bad signature length")
+    return {
+        "v": version, "iss": fields[0], "kid": fields[1], "loc": fields[2],
+        "iat": iat, "exp": exp, "sig": b64u_encode(signature),
+    }
+
 
 def sign_url_token(
     url: str,
@@ -68,63 +142,45 @@ def sign_url_token(
     key_id: str,
     location_id: str = "counter-01",
     iat: int = 0,
-    exp: int = 0
+    exp: int = 0,
 ) -> Tuple[str, Dict[str, Any]]:
-    """
-    Signs a URL and embeds the signature in a 'qrs' parameter.
-    Returns:
-      (signed_url, token_dict)
-    """
-    canonical_url = canonicalize_url(url)
-    msg = build_signature_message(canonical_url, issuer_id, key_id, location_id, iat, exp)
+    """Sign `url` and return (signed_url, token_dict). exp=0 means "does not expire"."""
+    canonical = canonicalize_url(url)
+    message = build_signature_message(canonical, issuer_id, key_id, location_id, iat, exp)
+    signature = private_key.sign(message)
+    token_b64 = pack_token(issuer_id, key_id, location_id, iat, exp, signature)
 
-    raw_sig = private_key.sign(msg)
-    sig_b64 = base64.urlsafe_b64encode(raw_sig).decode("ascii").rstrip("=")
-
-    token = {
-        "v": 1,
-        "iss": issuer_id,
-        "kid": key_id,
-        "loc": location_id,
-        "iat": iat,
-        "exp": exp,
-        "sig": sig_b64
-    }
-
-    # Encode token as compact JSON and base64url
-    token_json = json.dumps(token, separators=(',', ':'))
-    token_b64 = base64.urlsafe_b64encode(token_json.encode("utf-8")).decode("ascii").rstrip("=")
-
-    # Embed in target URL
-    parsed = urlparse(url)
-    queries = parse_qsl(parsed.query, keep_blank_values=True)
-    queries = [(k, v) for k, v in queries if k.lower() != "qrs"]
-    queries.append(("qrs", token_b64))
-    new_query = urlencode(queries)
-
-    signed_url = urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, new_query, parsed.fragment))
+    parsed = safe_urlparse(url.strip())
+    query = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True) if k.lower() != TOKEN_PARAM]
+    query.append((TOKEN_PARAM, token_b64))
+    signed_url = urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, urlencode(query), parsed.fragment))
+    token = {"v": TOKEN_VERSION, "iss": issuer_id, "kid": key_id, "loc": location_id,
+             "iat": int(iat), "exp": int(exp), "sig": b64u_encode(signature)}
     return signed_url, token
 
+
 def extract_token_from_url(url: str) -> Tuple[Optional[Dict[str, Any]], str]:
-    """
-    Extracts and parses the 'qrs' token from a URL.
-    Returns: (token_dict_or_None, canonical_url_without_qrs)
-    """
-    canonical_url = canonicalize_url(url)
-    parsed = urlparse(url)
-    params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    """Return (token_dict | None, canonical_url_without_qrs).
 
-    token_b64 = params.get("qrs")
-    if not token_b64:
-        return None, canonical_url
-
+    None  -> the URL carries no `qrs` parameter (unsigned, not an error).
+    {"error": ...} -> a `qrs` parameter is present but unusable.
+    """
+    parsed = safe_urlparse((url or "").strip())
+    if parsed is None:
+        return {"error": "unparseable_url"}, ""
+    values = [v for k, v in parse_qsl(parsed.query, keep_blank_values=True) if k.lower() == TOKEN_PARAM]
+    if not values:
+        try:
+            return None, canonicalize_url(url)
+        except TokenError:
+            return None, ""
     try:
-        # Add padding
-        padding = len(token_b64) % 4
-        if padding:
-            token_b64 += "=" * (4 - padding)
-        token_json_bytes = base64.urlsafe_b64decode(token_b64)
-        token_dict = json.loads(token_json_bytes.decode("utf-8"))
-        return token_dict, canonical_url
-    except Exception:
-        return {"error": "malformed_token"}, canonical_url
+        canonical = canonicalize_url(url)
+    except TokenError as exc:
+        return {"error": str(exc)}, ""
+    if len(values) != 1:                       # ambiguous duplicate tokens
+        return {"error": "duplicate_token_parameter"}, canonical
+    try:
+        return unpack_token(values[0]), canonical
+    except TokenError as exc:
+        return {"error": str(exc)}, canonical

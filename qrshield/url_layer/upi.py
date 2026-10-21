@@ -1,132 +1,86 @@
 """
-UPI deep-link security analysis (F11)
-Checks for payee name vs VPA handle mismatches, prefilled amount risks,
-unusual PSP handles, and collect-request or mandate payloads.
-"""
-import re
-from urllib.parse import urlparse, parse_qs
-from typing import Dict, Any, List
+UPI deep-link analysis (F11).
 
-# Recognized standard bank and fintech PSP handles in India
+Flags the classic scam shapes: a payee name that claims an official entity while the VPA is an
+individual's handle, prefilled amounts on a parking/restaurant code, collect/mandate requests
+and unusual PSP handles.
+"""
+from __future__ import annotations
+
+import re
+from typing import Any, Dict, List
+from urllib.parse import parse_qs
+
+from qrshield.netutil import safe_urlparse
+
 COMMON_PSP_HANDLES = {
-    "okaxis", "okhdfcbank", "okicici", "oksbi",
-    "ybl", "ibl", "axl", "ptaxis", "pthdfc", "ptsbi",
-    "paytm", "apl", "razerpay", "freecharge", "barodampay",
-    "upi", "postbank", "federal", "indus", "kotak"
+    "okaxis", "okhdfcbank", "okicici", "oksbi", "ybl", "ibl", "axl", "ptaxis", "pthdfc", "ptsbi", "ptyes",
+    "paytm", "apl", "freecharge", "barodampay", "upi", "postbank", "federal", "indus", "kotak", "fbl",
+    "sbi", "hdfcbank", "icici", "axisbank", "yesbank", "pnb", "cnrb", "boi", "ikwik", "jupiteraxis", "fam",
+    "airtel", "jio", "slice", "naviaxis", "tapicici", "rbl", "idfcbank", "aubank", "dbs", "hsbc", "unionbank",
 }
+AUTHORITY_WORDS = ("bank", "sbi", "hdfc", "icici", "axis", "parking", "metro", "bill", "tax", "challan",
+                   "govt", "gov", "municipal", "mcgm", "irctc", "railway", "electricity", "fastag", "police")
+COMMERCIAL_WORDS = ("parking", "store", "shop", "cafe", "restaurant", "mart", "hotel", "canteen")
+
+
+def _clean(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
 
 def analyze_upi_payload(payload: str) -> Dict[str, Any]:
-    """
-    Analyzes upi://pay or upi://mandate payloads for deception and risk.
-    """
-    parsed = urlparse(payload)
-    params = {k: v[0] for k, v in parse_qs(parsed.query).items()}
-
-    pa = params.get("pa", "").strip()  # Virtual Payment Address
-    pn = params.get("pn", "").strip()  # Payee Name
-    am = params.get("am", "").strip()  # Prefilled Amount
-    mc = params.get("mc", "").strip()  # Merchant code
-    tr = params.get("tr", "").strip()  # Transaction reference
+    parsed = safe_urlparse(payload.strip())
+    raw = {k.lower(): v[0] for k, v in parse_qs(parsed.query if parsed else "", keep_blank_values=True).items()}
+    pa, pn, am, mc = (raw.get(k, "").strip() for k in ("pa", "pn", "am", "mc"))
+    path = (parsed.netloc + parsed.path).lower() if parsed else ""
 
     signals: List[Dict[str, Any]] = []
-    risk_score = 0.0
+    risk = 0.0
 
-    is_mandate = "mandate" in parsed.path.lower() or "mandate" in payload.lower()
-    if is_mandate:
-        risk_score += 0.4
-        signals.append({
-            "name": "upi_mandate",
-            "value": True,
-            "text": "UPI mandate / autopay authorization request detected."
-        })
+    def add(name: str, value: Any, text: str, weight: float, direction: str = "risk") -> None:
+        nonlocal risk
+        risk += weight
+        signals.append({"name": name, "value": value, "text": text, "direction": direction})
 
-    # Validate VPA structure
+    if "mandate" in path or "mandate" in payload.lower().split("?", 1)[0]:
+        add("upi_mandate", True, "This is a recurring-payment (autopay) mandate request, not a one-off payment.", 0.40)
+    if raw.get("mode") in ("04", "05") or "collect" in payload.lower():
+        add("upi_collect", True, "This asks you to approve a money REQUEST (collect), which is how many UPI scams work.", 0.35)
+
+    vpa_user = psp = ""
     if not pa or "@" not in pa:
-        risk_score += 0.5
-        signals.append({
-            "name": "malformed_vpa",
-            "value": pa,
-            "text": "Missing or malformed Virtual Payment Address (VPA)."
-        })
-        vpa_user, psp = "", ""
+        add("malformed_vpa", pa, "The payment address (VPA) is missing or malformed.", 0.50)
     else:
         vpa_user, psp = pa.split("@", 1)
         psp = psp.lower()
         if psp not in COMMON_PSP_HANDLES and not psp.endswith("bank"):
-            risk_score += 0.2
-            signals.append({
-                "name": "unusual_psp",
-                "value": psp,
-                "text": f"Unusual or private PSP handle '@{psp}'."
-            })
+            add("unusual_psp", psp, f"The payment handle '@{psp}' is not a recognised UPI provider.", 0.20)
 
-    # Payee Name vs VPA consistency check
-    # Attack pattern: pn="State Bank Of India" or "City Parking" but pa="rohit1234@ybl"
-    mismatch_detected = False
+    mismatch = False
     if pn and vpa_user:
-        clean_pn = re.sub(r'[^a-zA-Z0-9]', '', pn).lower()
-        clean_vpa = re.sub(r'[^a-zA-Z0-9]', '', vpa_user).lower()
+        cn, cv = _clean(pn), _clean(vpa_user)
+        claims = any(w in cn for w in AUTHORITY_WORDS)
+        backs_up = any(w in cv for w in AUTHORITY_WORDS) or cv in cn or cn in cv
+        if claims and not backs_up:
+            mismatch = True
+            add("payee_vpa_mismatch", {"pn": pn, "pa": pa},
+                f"The payee is named '{pn}' but the money would go to '{pa}', which has nothing to do with that name.", 0.50)
 
-        # If name claims to be official (bank, parking, metro, electricity, bill)
-        claims_authority = any(k in clean_pn for k in [
-            "bank", "sbi", "hdfc", "icici", "parking", "metro", "bill", "tax", "challan", "govt"
-        ])
-        vpa_has_authority = any(k in clean_vpa for k in [
-            "bank", "sbi", "hdfc", "icici", "parking", "metro", "bill", "tax", "challan", "govt"
-        ])
-
-        if claims_authority and not vpa_has_authority:
-            mismatch_detected = True
-            risk_score += 0.5
-            signals.append({
-                "name": "payee_vpa_mismatch",
-                "value": {"pn": pn, "pa": pa},
-                "text": f"Payee name claims official entity '{pn}' but VPA handle is individual '{pa}'."
-            })
-
-    # Prefilled amount risk
     if am:
         try:
-            amt_val = float(am)
-            if amt_val > 500.0:
-                risk_score += 0.2
-                signals.append({
-                    "name": "high_prefilled_amount",
-                    "value": amt_val,
-                    "text": f"High prefilled payment amount: INR {amt_val:,.2f}."
-                })
-            else:
-                signals.append({
-                    "name": "prefilled_amount",
-                    "value": amt_val,
-                    "text": f"Prefilled payment amount: INR {amt_val:,.2f}."
-                })
+            amount = float(am)
+            if amount > 500:
+                add("high_prefilled_amount", amount, f"A high amount (INR {amount:,.0f}) is pre-filled.", 0.20)
+            elif any(w in pn.lower() for w in COMMERCIAL_WORDS):
+                add("prefilled_amount", amount, f"Pre-filled amount: INR {amount:,.0f}.", 0.0, "info")
         except ValueError:
-            risk_score += 0.2
-            signals.append({
-                "name": "invalid_amount_format",
-                "value": am,
-                "text": "Malformed payment amount parameter."
-            })
+            add("invalid_amount_format", am, "The amount field is not a valid number.", 0.20)
 
-    # Missing merchant code on commercial claims
-    if any(k in pn.lower() for k in ["parking", "store", "shop", "cafe", "restaurant", "mart"]) and not mc:
-        risk_score += 0.15
-        signals.append({
-            "name": "missing_merchant_code",
-            "value": None,
-            "text": "Commercial payee name without registered merchant category code (MCC)."
-        })
+    if any(w in pn.lower() for w in COMMERCIAL_WORDS) and not mc:
+        add("missing_merchant_code", None, "A business payee without a merchant category code (MCC).", 0.15)
 
-    risk_score = min(max(risk_score, 0.0), 1.0)
-
-    return {
-        "score": round(risk_score, 2),
-        "payload_type": "upi",
-        "pa": pa,
-        "pn": pn,
-        "am": am,
-        "mc": mc,
-        "mismatch": mismatch_detected,
-        "signals": signals
-    }
+    if not signals:
+        signals.append({"name": "upi_clean", "value": True, "text": "No UPI red flags found in this payment link.",
+                        "direction": "safe"})
+    return {"score": round(min(max(risk, 0.0), 1.0), 3), "payload_type": "upi", "pa": pa, "pn": pn, "am": am,
+            "mc": mc, "mismatch": mismatch, "signals": signals}

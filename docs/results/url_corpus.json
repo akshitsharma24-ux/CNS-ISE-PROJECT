@@ -1,0 +1,60 @@
+{
+  "raw_pool_rows": 1038276,
+  "shape_before_balancing": {
+    "benign": {
+      "has_path": 0.669,
+      "has_query": 0.091,
+      "len": 38.469
+    },
+    "phishing": {
+      "has_path": 0.412,
+      "has_query": 0.103,
+      "len": 41.653
+    }
+  },
+  "balanced_pool_rows": 120000,
+  "shape_after_balancing": {
+    "benign": {
+      "has_path": 0.441,
+      "has_query": 0.069,
+      "len": 31.193
+    },
+    "phishing": {
+      "has_path": 0.441,
+      "has_query": 0.069,
+      "len": 36.246
+    }
+  },
+  "per_source_shape_raw": {
+    "ealvaradob": {
+      "benign": {
+        "has_path": 0.876,
+        "has_query": 0.12,
+        "len": 45.697
+      },
+      "phishing": {
+        "has_path": 0.449,
+        "has_query": 0.115,
+        "len": 43.025
+      }
+    },
+    "phiusiil": {
+      "benign": {
+        "has_path": 0.0,
+        "has_query": 0.0,
+        "len": 15.229
+      },
+      "phishing": {
+        "has_path": 0.271,
+        "has_query": 0.061,
+        "len": 36.479
+      }
+    }
+  },
+  "train_pool_with_synthetic_rows": 129000,
+  "synthetic_rows": 9000,
+  "external_rows": 11237,
+  "recent_phishing_rows": 20277,
+  "popular_rows": 20000,
+  "heldout_domains_removed_from_pool": 36366
+}

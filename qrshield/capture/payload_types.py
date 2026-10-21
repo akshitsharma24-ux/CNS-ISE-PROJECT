@@ -1,117 +1,84 @@
 """
-Payload type parser (F04)
-Distinguishes between URL, UPI deep-links, tel, sms, WiFi, mailto, geo,
-and inherently dangerous schemes like javascript:, data:, intent://.
-"""
-from urllib.parse import urlparse, parse_qs
-from typing import Dict, Any, Tuple
+Payload type parser (F04).
 
-RISKY_SCHEMES = {"javascript", "data", "intent", "vbscript", "file"}
+Classifies a decoded QR payload as one of:
+  url, upi, wifi, tel, sms, mailto, geo, vcard, crypto, risky_scheme, text
+Only `url` and `upi` are analysed by the ML/UPI machinery; everything else is routed to a
+small rule set in the URL layer. Inherently dangerous schemes (javascript:, data:, intent://,
+file:, vbscript:) are flagged as `risky_scheme`.
+"""
+from __future__ import annotations
+
+import re
+from typing import Any, Dict, Tuple
+from urllib.parse import parse_qs
+
+from qrshield.netutil import safe_urlparse
+
+RISKY_SCHEMES = ("javascript", "data", "intent", "vbscript", "file", "blob", "ms-msdt", "search-ms")
+CRYPTO_SCHEMES = ("bitcoin", "ethereum", "litecoin", "monero", "solana")
+_BARE_DOMAIN = re.compile(r"^(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,24}(?::\d+)?(?:[/?#].*)?$", re.I)
+
+
+def _query_params(query: str) -> Dict[str, str]:
+    return {k: v[0] for k, v in parse_qs(query, keep_blank_values=True).items()}
+
 
 def parse_payload_type(payload: str) -> Tuple[str, Dict[str, Any]]:
-    """
-    Parses a decoded QR payload string and returns (payload_type, metadata).
-
-    payload_type is one of:
-      - 'url'
-      - 'upi'
-      - 'wifi'
-      - 'tel'
-      - 'sms'
-      - 'mailto'
-      - 'geo'
-      - 'risky_scheme'
-      - 'text'
-      - 'other'
-    """
-    if not payload:
-        return "other", {"error": "Empty payload"}
-
+    """Return (payload_type, metadata). Never raises."""
+    if not payload or not payload.strip():
+        return "text", {"error": "empty payload"}
     raw = payload.strip()
     lower = raw.lower()
 
-    # Check for known dangerous schemes immediately
-    for risky in RISKY_SCHEMES:
-        if lower.startswith(f"{risky}:") or lower.startswith(f"{risky}//"):
-            return "risky_scheme", {
-                "scheme": risky,
-                "warning": f"Potentially malicious execution scheme '{risky}:' detected."
-            }
+    scheme = lower.split(":", 1)[0] if ":" in lower else ""
+    if scheme in RISKY_SCHEMES:
+        return "risky_scheme", {"scheme": scheme,
+                                "warning": f"'{scheme}:' payloads can execute code or exfiltrate data when opened."}
 
-    # UPI scheme
-    if lower.startswith("upi://pay") or lower.startswith("upi://mandate") or lower.startswith("upi://"):
-        parsed = urlparse(raw)
-        params = {k: v[0] for k, v in parse_qs(parsed.query).items()}
-        return "upi", {
-            "scheme": "upi",
-            "params": params,
-            "pa": params.get("pa", ""),
-            "pn": params.get("pn", ""),
-            "am": params.get("am", ""),
-            "mc": params.get("mc", ""),
-            "tr": params.get("tr", ""),
-            "mode": "mandate" if "mandate" in lower else "pay"
-        }
+    if lower.startswith("upi://"):
+        parsed = safe_urlparse(raw)
+        params = _query_params(parsed.query) if parsed else {}
+        return "upi", {"scheme": "upi", "params": params, "pa": params.get("pa", ""),
+                       "pn": params.get("pn", ""), "am": params.get("am", ""), "mc": params.get("mc", ""),
+                       "mode": "mandate" if "mandate" in lower.split("?", 1)[0] else "pay"}
 
-    # Standard Web URLs
-    if lower.startswith("http://") or lower.startswith("https://"):
-        parsed = urlparse(raw)
-        return "url", {
-            "scheme": parsed.scheme,
-            "netloc": parsed.netloc,
-            "path": parsed.path,
-            "query": parsed.query,
-            "params": parse_qs(parsed.query)
-        }
+    if lower.startswith(("http://", "https://")):
+        parsed = safe_urlparse(raw)
+        if parsed is None:
+            return "url", {"malformed": True, "preview": raw[:100]}
+        return "url", {"scheme": parsed.scheme, "netloc": parsed.netloc, "path": parsed.path}
 
-    # WiFi QR codes: WIFI:S:MySSID;T:WPA;P:MyPassword;;
-    if raw.startswith("WIFI:") or raw.startswith("wifi:"):
-        parts = raw[5:].split(";")
-        wifi_dict = {}
-        for p in parts:
-            if ":" in p:
-                k, v = p.split(":", 1)
-                wifi_dict[k.strip()] = v.strip()
-        return "wifi", {
-            "ssid": wifi_dict.get("S", ""),
-            "auth": wifi_dict.get("T", "nopass"),
-            "hidden": wifi_dict.get("H", "false")
-        }
+    if lower.startswith("wifi:"):
+        fields = {}
+        for part in re.split(r"(?<!\\);", raw[5:]):
+            if ":" in part:
+                k, v = part.split(":", 1)
+                fields[k.strip().upper()] = v.replace("\\;", ";").strip()
+        return "wifi", {"ssid": fields.get("S", ""), "auth": fields.get("T", "nopass") or "nopass",
+                        "hidden": fields.get("H", "false").lower() == "true", "has_password": bool(fields.get("P"))}
 
-    # Telephony
     if lower.startswith("tel:"):
         return "tel", {"number": raw[4:]}
-
-    # SMS
-    if lower.startswith("sms:") or lower.startswith("smsto:"):
-        colon_idx = raw.find(":")
-        num_part = raw[colon_idx + 1:]
-        body = ""
-        if "?" in num_part:
-            num, q = num_part.split("?", 1)
-            params = parse_qs(q)
-            body = params.get("body", [""])[0]
-        else:
-            num = num_part
-        return "sms", {"number": num, "body": body}
-
-    # Mailto
+    if lower.startswith(("sms:", "smsto:")):
+        rest = raw.split(":", 1)[1]
+        number, _, query = rest.partition("?")
+        body = _query_params(query).get("body", "")
+        if not body and ":" in number:          # smsto:NUMBER:BODY form
+            number, _, body = number.partition(":")
+        return "sms", {"number": number, "body": body}
     if lower.startswith("mailto:"):
-        parsed = urlparse(raw)
-        return "mailto", {"to": parsed.path, "query": parse_qs(parsed.query)}
-
-    # Geo
+        to, _, query = raw[7:].partition("?")
+        return "mailto", {"to": to, "query": _query_params(query)}
     if lower.startswith("geo:"):
         return "geo", {"coords": raw[4:]}
+    if lower.startswith(("begin:vcard", "mecard:", "begin:vevent")):
+        return "vcard", {"kind": lower.split(":", 1)[0]}
+    if scheme in CRYPTO_SCHEMES:
+        return "crypto", {"scheme": scheme}
 
-    # If it has www. or looks like a URL without scheme
-    if lower.startswith("www.") or any(lower.endswith(ext) for ext in [".com", ".org", ".net", ".in", ".io", ".co"]):
-        parsed = urlparse("https://" + raw)
-        return "url", {
-            "scheme": "https",
-            "netloc": parsed.netloc,
-            "path": parsed.path,
-            "inferred_scheme": True
-        }
+    if _BARE_DOMAIN.match(raw) and " " not in raw:
+        # scheme-less URL such as "evil-bank.com/login": scanners would guess http(s)
+        return "url", {"scheme": "https", "inferred_scheme": True, "netloc": raw.split("/")[0], "path": ""}
 
     return "text", {"text_length": len(raw), "preview": raw[:100]}
