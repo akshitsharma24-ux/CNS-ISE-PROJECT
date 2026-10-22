@@ -3,7 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="color-scheme" content="dark light">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#d3202f">
   <meta name="description" content="QRshield checks a QR code before you open it: link analysis, a pasted-sticker check and cryptographic signature verification.">
   <title>QRshield - scan, verify, then decide</title>
   <link rel="icon" href="img/favicon.svg" type="image/svg+xml">
@@ -24,33 +25,176 @@
     <symbol id="i-flag" viewBox="0 0 24 24"><path d="M5 21V4m0 0h11l-2 4 2 4H5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/></symbol>
     <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3M5 5l2 2m10 10 2 2M19 5l-2 2M7 17l-2 2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
     <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 11v6m0-9v.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8 11V8a4 4 0 0 1 8 0v3M12 15v2.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+    <symbol id="i-qr" viewBox="0 0 24 24"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h3v3h-3zM19 14v1m-2 4h3v1m-3-3v.01" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/></symbol>
   </svg>
 
   <a class="skip" href="#main">Skip to content</a>
 
+  <div class="topstrip"><div class="wrap">
+    <span>Scan, verify, then decide &mdash; every QR checked before it opens.</span>
+    <span id="model-chip" class="chip" title="Active model versions">models</span>
+  </div></div>
+
   <header class="topbar">
     <div class="wrap topbar-inner">
-      <a class="brand" href="#/scan" aria-label="QRshield home">
+      <a class="brand" href="#/home" aria-label="QRshield home">
         <span class="brand-mark"><svg class="icon"><use href="#i-shield"/></svg></span>
         <span class="brand-text"><strong>QRshield</strong><small>scan, verify, then decide</small></span>
       </a>
       <nav class="nav" aria-label="Main">
+        <a href="#/home" data-nav="home">Home</a>
         <a href="#/scan" data-nav="scan">Scan</a>
+        <a href="#/how" data-nav="how">How it works</a>
+        <a href="#/security" data-nav="security">Security</a>
         <a href="#/issuer" data-nav="issuer">Issuer portal</a>
         <a href="#/admin" data-nav="admin">Admin</a>
-        <a href="#/how" data-nav="how">How it works</a>
+        <a href="#/faq" data-nav="faq">FAQ</a>
+        <a href="#/about" data-nav="about">About</a>
       </nav>
       <div class="topbar-tools">
-        <span id="model-chip" class="chip" title="Active model versions">models</span>
+        <a class="btn primary sm" href="#/scan"><svg class="icon"><use href="#i-qr"/></svg>Scan now</a>
         <button id="theme-toggle" class="icon-btn" type="button" aria-label="Toggle light/dark theme"><svg class="icon"><use href="#i-sun"/></svg></button>
       </div>
     </div>
   </header>
 
-  <main id="main" class="wrap">
+  <main id="main">
+
+    <!-- ===================================================== HOME -->
+    <section id="view-home" class="view" data-view="home" hidden>
+      <div class="hero">
+        <div class="wrap hero-grid">
+          <div>
+            <span class="pill"><b>NEW</b> Three-layer defence against quishing</span>
+            <h1>Know what a QR code does <em>before</em> you open it.</h1>
+            <p class="lead">QRshield inspects the link, the physical sticker and the cryptographic signature of any QR code &mdash; then gives one clear verdict: <strong>safe</strong>, <strong>suspicious</strong> or <strong>block</strong>.</p>
+            <div class="btn-row">
+              <a class="btn primary lg" href="#/scan"><svg class="icon"><use href="#i-qr"/></svg>Scan a QR code</a>
+              <a class="btn ghost lg" href="#/how">See how it works</a>
+            </div>
+            <div class="trust-row">
+              <span><svg class="icon"><use href="#i-check"/></svg>Ed25519 signed codes</span>
+              <span><svg class="icon"><use href="#i-check"/></svg>SSRF-safe link look-ups</span>
+              <span><svg class="icon"><use href="#i-check"/></svg>Photos never stored</span>
+            </div>
+          </div>
+          <div class="stage" aria-hidden="true">
+            <div class="float-card a"><svg class="icon"><use href="#i-key"/></svg><div>Signature<small>checked first</small></div></div>
+            <div class="phone"><div class="phone-screen">
+              <div class="phone-notch"></div>
+              <div class="qr-art"><svg viewBox="0 0 21 21" shape-rendering="crispEdges" aria-hidden="true"><path fill="#1a0b0d" d="M0 0h7v7H0zM14 0h7v7h-7zM0 14h7v7H0z"/><path fill="#fff" d="M1 1h5v5H1zM15 1h5v5h-5zM1 15h5v5H1z"/><path fill="#d3202f" d="M2 2h3v3H2zM16 2h3v3h-3zM2 16h3v3H2z"/><path fill="#1a0b0d" d="M8 0h2v2H8zM11 1h2v2h-2zM8 3h1v3H8zM10 4h3v2h-3zM0 8h2v2H0zM3 8h3v1H3zM7 8h2v2H7zM10 8h2v2h-2zM13 8h3v2h-3zM17 8h4v2h-4zM1 11h3v2H1zM5 10h2v3H5zM8 11h3v2H8zM12 11h2v1h-2zM15 11h2v2h-2zM18 11h3v1h-3zM8 14h2v3H8zM11 14h2v2h-2zM14 14h2v2h-2zM17 14h2v2h-2zM19 17h2v4h-2zM11 17h3v2h-3zM15 18h2v3h-2zM8 18h2v3H8z"/></svg></div>
+              <div class="mock-verdict"><svg class="icon"><use href="#i-block"/></svg><div><b>BLOCK</b><small>Sticker pasted over a signed code</small></div></div>
+              <div class="mock-rows">
+                <div class="mock-row"><span class="badge m1">M1</span>Link analysis<i class="ok">clean</i></div>
+                <div class="mock-row"><span class="badge m2">M2</span>Sticker check<i class="bad">pasted</i></div>
+                <div class="mock-row"><span class="badge m3">M3</span>Signature<i class="bad">invalid</i></div>
+              </div>
+            </div></div>
+            <div class="float-card b"><svg class="icon"><use href="#i-eye"/></svg><div>Evidence overlay<small>see what we saw</small></div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="band"><div class="wrap band-grid">
+        <div class="band-item"><b>3</b><span>independent defence layers</span></div>
+        <div class="band-item"><b>48</b><span>physical sticker features</span></div>
+        <div class="band-item"><b>Ed25519</b><span>root-signed mini-PKI</span></div>
+        <div class="band-item"><b>0</b><span>photos stored on the server</span></div>
+      </div></div>
+
+      <div class="section">
+        <div class="wrap">
+          <div class="section-head center">
+            <span class="eyebrow">Why QRshield</span>
+            <h2>A QR code is a link you cannot read</h2>
+            <p>Attackers hide behind that. They publish look-alike links no blocklist has seen, and paste stickers over real codes on parking meters, menus and payment stands. One check is never enough.</p>
+          </div>
+          <div class="cards-3">
+            <article class="feature"><span class="tag">M1</span><div class="ico"><svg class="icon"><use href="#i-link"/></svg></div>
+              <h3>Link analysis</h3><p>A calibrated machine-learning model plus brand-impersonation rules catches look-alike and scam links, UPI payee tricks and shortener hops.</p>
+              <ul><li><svg class="icon"><use href="#i-check"/></svg>Character n-gram + LightGBM</li><li><svg class="icon"><use href="#i-check"/></svg>Official-domain brand rules</li><li><svg class="icon"><use href="#i-check"/></svg>SSRF-safe shortener look-ahead</li></ul></article>
+            <article class="feature"><span class="tag">M2</span><div class="ico"><svg class="icon"><use href="#i-camera"/></svg></div>
+              <h3>Sticker check</h3><p>The photo is flattened onto the QR plane and measured for the tell-tale signs of a code pasted over another one.</p>
+              <ul><li><svg class="icon"><use href="#i-check"/></svg>Edges, shadow, paper colour, grain</li><li><svg class="icon"><use href="#i-check"/></svg>Gloss and hidden-original fragments</li><li><svg class="icon"><use href="#i-check"/></svg>Visual evidence overlay</li></ul></article>
+            <article class="feature"><span class="tag">M3</span><div class="ico"><svg class="icon"><use href="#i-key"/></svg></div>
+              <h3>Signature check</h3><p>Businesses sign their codes. QRshield verifies the signature, the certificate chain and the domain binding against a pinned root key.</p>
+              <ul><li><svg class="icon"><use href="#i-check"/></svg>Root-signed issuer certificates</li><li><svg class="icon"><use href="#i-check"/></svg>Signed, versioned revocation list</li><li><svg class="icon"><use href="#i-check"/></svg>Key rotation, fail-closed</li></ul></article>
+          </div>
+        </div>
+      </div>
+
+      <div class="section tint">
+        <div class="wrap">
+          <div class="section-head center">
+            <span class="eyebrow">How it works</span>
+            <h2>From camera to verdict in four steps</h2>
+          </div>
+          <div class="steps">
+            <div class="step"><h3>Capture</h3><p>Take or upload a photo, use the live camera, or just paste a link. Include the area around the code.</p></div>
+            <div class="step"><h3>Decode safely</h3><p>Size and pixel limits are enforced before decoding. Hostile images never crash the parser.</p></div>
+            <div class="step"><h3>Three checks</h3><p>Link, sticker and signature layers run independently, so each one covers the others&rsquo; blind spots.</p></div>
+            <div class="step"><h3>One verdict</h3><p>Cryptographic facts come first, then evidence is fused. Every verdict shows its working.</p></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="wrap split">
+          <div>
+            <span class="eyebrow">Decision engine</span>
+            <h2>Cryptography first. Evidence second. Always explained.</h2>
+            <p class="lead">The engine never hides behind a score. Hard facts &mdash; a valid or forged signature &mdash; outrank statistics, and visual evidence alone can never block a code.</p>
+            <ul class="checks">
+              <li><span class="tick"><svg class="icon"><use href="#i-check"/></svg></span><div><b>Fail-closed verification</b><span>No trust anchor means nothing verifies. Signatures are checked before expiry or domain.</span></div></li>
+              <li><span class="tick"><svg class="icon"><use href="#i-check"/></svg></span><div><b>Noisy-OR fusion</b><span>Independent weak signals add up; one weak signal cannot raise a false alarm alone.</span></div></li>
+              <li><span class="tick"><svg class="icon"><use href="#i-check"/></svg></span><div><b>Human-reviewed learning</b><span>Reports reach the training set only after a person approves them and a benchmark gate passes.</span></div></li>
+            </ul>
+          </div>
+          <div class="panel"><div class="flow">
+            <div class="flow-node"><span class="badge m3">M3</span><div><strong>Signature &amp; certificate</strong><small>valid, forged, revoked or unsigned</small></div><svg class="icon"><use href="#i-key"/></svg></div>
+            <div class="flow-arrow"></div>
+            <div class="flow-node"><span class="badge m1">M1</span><div><strong>Link analysis</strong><small>look-alike, UPI, shortener</small></div><svg class="icon"><use href="#i-link"/></svg></div>
+            <div class="flow-arrow"></div>
+            <div class="flow-node"><span class="badge m2">M2</span><div><strong>Sticker check</strong><small>physical tamper evidence</small></div><svg class="icon"><use href="#i-camera"/></svg></div>
+            <div class="flow-arrow"></div>
+            <div class="flow-node final"><span class="badge m4">M4</span><div><strong>Decision engine</strong><small>SAFE &middot; SUSPICIOUS &middot; BLOCK</small></div><svg class="icon"><use href="#i-shield"/></svg></div>
+          </div></div>
+        </div>
+      </div>
+
+      <div class="section tint">
+        <div class="wrap">
+          <div class="section-head center">
+            <span class="eyebrow">Verdicts</span>
+            <h2>Three outcomes. No guesswork.</h2>
+          </div>
+          <div class="verdict-trio">
+            <div class="vcard"><svg class="icon"><use href="#i-shield"/></svg><h3>SAFE</h3><p>No red flags, or a genuine signed code from a registered business. Safe to open.</p></div>
+            <div class="vcard warn"><svg class="icon"><use href="#i-warn"/></svg><h3>SUSPICIOUS</h3><p>Some signals look wrong. QRshield shows exactly which, and asks you to confirm before opening.</p></div>
+            <div class="vcard block"><svg class="icon"><use href="#i-block"/></svg><h3>BLOCK</h3><p>Strong evidence of attack, such as a forged signature or a look-alike payment link.</p></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="wrap">
+          <div class="cta">
+            <h2>Try it on a real photo in under a minute</h2>
+            <p>Use the one-click demo scenarios, upload your own photo, or sign a QR code as a business and watch it verify.</p>
+            <div class="btn-row">
+              <a class="btn light lg" href="#/scan">Start scanning</a>
+              <a class="btn outline-light lg" href="#/issuer">Open issuer portal</a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
 
     <!-- ===================================================== SCAN -->
-    <section id="view-scan" class="view" data-view="scan">
+    <section id="view-scan" class="view" data-view="scan" hidden>
+      <div class="page-head"><span class="eyebrow">Scanner</span><h1>Scan a QR code, then decide</h1><p>Upload a photo, use your camera, or paste a link. Three independent checks run before anything opens.</p></div>
       <div class="scan-grid">
         <div class="stack">
           <div class="card" id="input-card">
@@ -147,6 +291,7 @@
 
     <!-- ===================================================== ISSUER PORTAL -->
     <section id="view-issuer" class="view" data-view="issuer" hidden>
+      <div class="page-head"><span class="eyebrow">Issuer portal</span><h1>Sign your QR codes so customers can trust them</h1><p>Register a business, bind it to your domain and generate Ed25519-signed QR codes that any phone camera still opens.</p></div>
       <div id="issuer-gate" class="card gate" hidden></div>
       <div id="issuer-body" hidden>
         <div class="issuer-grid">
@@ -202,6 +347,7 @@
 
     <!-- ===================================================== ADMIN -->
     <section id="view-admin" class="view" data-view="admin" hidden>
+      <div class="page-head"><span class="eyebrow">Admin console</span><h1>Review reports, retrain safely, audit everything</h1><p>A human approves every report before it can influence the model, and every action lands in the audit trail.</p></div>
       <div id="admin-gate" class="card gate" hidden></div>
       <div id="admin-body" hidden>
         <div id="stat-row" class="stats"></div>
@@ -235,6 +381,7 @@
 
     <!-- ===================================================== HOW IT WORKS -->
     <section id="view-how" class="view" data-view="how" hidden>
+      <div class="page-head"><span class="eyebrow">How it works</span><h1>Three layers, one honest verdict</h1><p>What each layer measures, how the results are fused, and what QRshield cannot do.</p></div>
       <div class="how-grid">
         <div class="card prose">
           <h2>Why scanning a QR code is risky</h2>
@@ -258,10 +405,95 @@
         </div>
       </div>
     </section>
+
+    <!-- ===================================================== SECURITY -->
+    <section id="view-security" class="view" data-view="security" hidden>
+      <div class="page-head"><span class="eyebrow">Security</span><h1>Cryptography and network security, applied</h1><p>Every concept from the course maps to real code in this project, with a test that proves each defence.</p></div>
+      <div class="table-scroll"><table class="spec">
+        <thead><tr><th>CNS concept</th><th>What QRshield does</th><th>Where</th></tr></thead>
+        <tbody>
+          <tr><td>Digital signatures</td><td>Ed25519 over a domain-separated, canonicalised message; a 64-byte signature in a ~140-character token.</td><td><code>crypto_layer/token.py</code></td></tr>
+          <tr><td>PKI / certificates</td><td>Pinned root key and root-signed issuer certificates bound to a domain and key id.</td><td><code>crypto_layer/pki.py</code></td></tr>
+          <tr><td>Domain binding</td><td>A genuine issuer cannot certify a look-alike host; bare suffixes cannot be certified.</td><td><code>crypto_layer/pki.py</code></td></tr>
+          <tr><td>Revocation</td><td>Root-signed, versioned CRL with per-key revocation, key rotation and rollback protection.</td><td><code>crypto_layer/revocation.py</code></td></tr>
+          <tr><td>Fail-closed verification</td><td>No trust anchor means nothing verifies; the signature is checked before expiry and domain.</td><td><code>crypto_layer/verify.py</code></td></tr>
+          <tr><td>Hashing</td><td>SHA-256 payload fingerprints for reports and telemetry.</td><td><code>registry/service.py</code></td></tr>
+          <tr><td>SSRF defence</td><td>Resolve once, public IPs only, connect to the validated IP (DNS-rebinding-proof), re-validate every redirect.</td><td><code>url_layer/fetch_safe.py</code></td></tr>
+          <tr><td>Hostile input parsing</td><td>Size and pixel limits before decoding; parsers that never raise; canonical URLs; userinfo rejected.</td><td><code>capture/decode.py</code></td></tr>
+          <tr><td>Web hardening</td><td>Strict CSP, no inline script, constant-time admin token, rate limits, append-only audit log.</td><td><code>app/security.py</code></td></tr>
+          <tr><td>Poisoning defence</td><td>Human review, a fixed benchmark and canary links gate every model promotion.</td><td><code>retrain.py</code></td></tr>
+        </tbody>
+      </table></div>
+
+      <div class="cards-2 sec-gap">
+        <article class="feature"><div class="ico"><svg class="icon"><use href="#i-lock"/></svg></div><h3>Privacy by design</h3><p>Photos are analysed in memory and never stored. Reports keep only the link, your label and an optional note &mdash; no photo, no identity. Scan history lives only in your browser.</p></article>
+        <article class="feature"><div class="ico"><svg class="icon"><use href="#i-globe"/></svg></div><h3>Safe look-ups</h3><p>When QRshield follows a shortener it resolves DNS once, refuses private addresses and connects to the validated IP, so a hostile link cannot probe your network.</p></article>
+      </div>
+
+      <div class="card prose sec-gap">
+        <h2>What QRshield cannot do</h2>
+        <div class="limit"><span class="ico"><svg class="icon"><use href="#i-warn"/></svg></span><div><h3>A perfectly fitted sticker</h3><p>Over an unsigned code it looks like a genuine sticker. The sticker check catches imperfect covers; the signature check catches it only for businesses that sign.</p></div></div>
+        <div class="limit"><span class="ico"><svg class="icon"><use href="#i-warn"/></svg></span><div><h3>Replay of a valid code</h3><p>A signature proves who issued a payload, not that the physical code was never copied. Location binding, expiry and the sticker check limit this.</p></div></div>
+        <div class="limit"><span class="ico"><svg class="icon"><use href="#i-warn"/></svg></span><div><h3>Statistical link model</h3><p>It will misjudge some legitimate and some malicious links, which is why it is one layer of three and not the whole verdict.</p></div></div>
+      </div>
+    </section>
+
+    <!-- ===================================================== FAQ -->
+    <section id="view-faq" class="view" data-view="faq" hidden>
+      <div class="page-head"><span class="eyebrow">FAQ</span><h1>Questions, answered plainly</h1><p>Short answers about what QRshield checks, what it keeps and where it can be fooled.</p></div>
+      <div class="faq">
+        <details open><summary>What is quishing?</summary><p>Quishing is phishing through QR codes. The code hides a malicious link, or a sticker is pasted over a genuine code so scanners land on the attacker&rsquo;s page.</p></details>
+        <details><summary>Does QRshield open the link for me?</summary><p>No. It shows the destination and the verdict first. For suspicious or blocked codes you must explicitly confirm before the link is offered.</p></details>
+        <details><summary>Do you store my photos?</summary><p>No. Photos are analysed in memory and discarded. Scan history is stored only in your own browser and can be cleared at any time.</p></details>
+        <details><summary>What is a signed QR code?</summary><p>An ordinary link with one extra parameter holding an Ed25519 signature. Any phone camera still opens it, but QRshield also verifies the signature, the certificate chain and the domain binding.</p></details>
+        <details><summary>Why can a sticker alone not BLOCK a code?</summary><p>Visual evidence is probabilistic. To avoid false alarms, a sticker finding can raise the risk to suspicious, but only hard facts such as a forged signature or a clearly malicious link lead to BLOCK.</p></details>
+        <details><summary>Can I use the live camera on my phone?</summary><p>Browsers allow the live camera only over HTTPS or localhost. On a phone, use <em>Photo &rarr; Take photo</em>, or run the server with <code>--https</code> and open the printed address.</p></details>
+        <details><summary>How does the model learn from reports?</summary><p>Reports wait in a review queue. Only approved ones join the training data, and a retrained model is promoted only if it beats the active model on a fixed benchmark and canary links.</p></details>
+        <details><summary>Where do I find the admin token?</summary><p>It is printed in the server console at start-up and saved in <code>.qrshield/admin_token</code>. You can set your own with <code>QRSHIELD_ADMIN_TOKEN</code>.</p></details>
+      </div>
+    </section>
+
+    <!-- ===================================================== ABOUT -->
+    <section id="view-about" class="view" data-view="about" hidden>
+      <div class="page-head"><span class="eyebrow">About</span><h1>Built by Team Black Sparrow</h1><p>QRshield is the ISE-2 project for Cryptography and Network Security (CE305/CS305) at SPIT Mumbai, academic year 2026-27.</p></div>
+      <div class="how-grid">
+        <div class="card prose">
+          <h2>The project</h2>
+          <p>QRshield demonstrates that no single check can protect a QR scanner. A link model cannot see stickers, a camera check cannot read a link, and signatures help only the businesses that sign. Layering all three &mdash; and showing the working &mdash; closes the gaps each leaves.</p>
+          <h3>Built with</h3>
+          <div class="stack-chips">
+            <span class="chip">Python 3.11</span><span class="chip">FastAPI</span><span class="chip">Ed25519</span><span class="chip">LightGBM</span><span class="chip">OpenCV</span><span class="chip">scikit-image</span><span class="chip">ZXing</span><span class="chip">SQLAlchemy</span><span class="chip">Vanilla JS</span>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Project modules</h2></div>
+          <ul class="timeline">
+            <li><b>M1 &middot; Link analysis</b><span>Calibrated URL model and brand rules.</span></li>
+            <li><b>M2 &middot; Sticker check</b><span>Rectification, 48 physical features, evidence overlay.</span></li>
+            <li><b>M3 &middot; Signature check</b><span>Ed25519 tokens, mini-PKI, revocation.</span></li>
+            <li><b>M4 &middot; Decision engine</b><span>Crypto-first fusion with a full explanation.</span></li>
+          </ul>
+        </div>
+      </div>
+      <div class="section-head sec-gap"><span class="eyebrow">The team</span><h2>Team Black Sparrow</h2></div>
+      <div class="team">
+        <div class="person"><div class="avatar">AS</div><h3>Akshit Sharma</h3><p>Team leader</p><span class="chip">Lead</span></div>
+        <div class="person"><div class="avatar">BS</div><h3>Black Sparrow</h3><p>Cryptography &amp; Network Security</p><span class="chip">SPIT Mumbai</span></div>
+      </div>
+    </section>
   </main>
 
-  <footer class="wrap footer muted small">
-    QRshield &middot; Team Black Sparrow &middot; SPIT Mumbai &middot; Cryptography &amp; Network Security (CE305/CS305)
+  <footer class="site-footer">
+    <div class="wrap footer-grid">
+      <div>
+        <a class="brand" href="#/home"><span class="brand-mark"><svg class="icon"><use href="#i-shield"/></svg></span><span class="brand-text"><strong>QRshield</strong><small>scan, verify, then decide</small></span></a>
+        <p>A three-layer detector for malicious and tampered QR codes: link analysis, a pasted-sticker check and signed codes with a mini-PKI.</p>
+      </div>
+      <div><h4>Product</h4><ul><li><a href="#/scan">Scan a code</a></li><li><a href="#/issuer">Issuer portal</a></li><li><a href="#/admin">Admin console</a></li></ul></div>
+      <div><h4>Learn</h4><ul><li><a href="#/how">How it works</a></li><li><a href="#/security">Security</a></li><li><a href="#/faq">FAQ</a></li></ul></div>
+      <div><h4>Project</h4><ul><li><a href="#/about">About the team</a></li><li><a href="https://github.com/akshitsharma24-ux/CNS-ISE-PROJECT" rel="noopener">GitHub</a></li></ul></div>
+    </div>
+    <div class="wrap footer-base"><span>&copy; 2026 QRshield &middot; Team Black Sparrow &middot; SPIT Mumbai</span><span>Cryptography &amp; Network Security (CE305/CS305)</span></div>
   </footer>
 
   <dialog id="report-dialog" class="dialog">

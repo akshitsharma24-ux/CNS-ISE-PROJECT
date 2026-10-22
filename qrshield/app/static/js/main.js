@@ -5,13 +5,13 @@ import { enterIssuer, initIssuer } from "./issuer.js";
 import { initScan, leaveScan } from "./scan.js";
 import { $, $$, el, safeStorage } from "./util.js";
 
-const VIEWS = ["scan", "issuer", "admin", "how"];
+const VIEWS = ["home", "scan", "issuer", "admin", "how", "security", "faq", "about"];
 const store = safeStorage();
 let current = null;
 
 function route() {
-  const name = (location.hash.replace(/^#\/?/, "") || "scan").split("/")[0];
-  const view = VIEWS.includes(name) ? name : "scan";
+  const name = (location.hash.replace(/^#\/?/, "") || "home").split("/")[0];
+  const view = VIEWS.includes(name) ? name : "home";
   if (current === "scan" && view !== "scan") leaveScan();
   if (current === "admin" && view !== "admin") leaveAdmin();
   current = view;
@@ -31,7 +31,7 @@ function initTheme() {
   const saved = store?.getItem("qrshield.theme");
   if (saved) applyTheme(saved);
   $("#theme-toggle").addEventListener("click", () => {
-    const dark = (document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark")) === "dark";
+    const dark = document.documentElement.dataset.theme === "dark";
     const next = dark ? "light" : "dark";
     applyTheme(next);
     store?.setItem("qrshield.theme", next);
