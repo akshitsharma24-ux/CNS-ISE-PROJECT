@@ -63,6 +63,17 @@ def test_response_contract(client):
 
 
 @pytest.mark.slow
+def test_scan_explain_returns_the_occlusion_map_only_on_request(client):
+    img = client.get("/api/demo/scenario-image/4").content
+    plain = client.post("/api/scan", files={"image": ("s4.jpg", img, "image/jpeg")}).json()
+    assert "saliency" not in plain["layers"]["cv_layer"]["details"]
+    d = client.post("/api/scan?explain=true", files={"image": ("s4.jpg", img, "image/jpeg")}).json()
+    sal = d["layers"]["cv_layer"]["details"]["saliency"]
+    assert sal["png_b64"].startswith("data:image/png;base64,") and isinstance(sal["hot_spot"], bool)
+    assert sal["peak"] > 0.0, "blanking regions of a tampered photo must move the model at least a little"
+    assert d["decision"]["verdict"] == plain["decision"]["verdict"]
+
+
 def test_revocation_changes_the_verdict_live(client):
     assert scan_scenario(client, 3)["decision"]["verdict"] == "SAFE"
     r = client.post("/api/admin/issuers/citypark-01/revoke", json={"reason": "test"}, headers=client.admin)

@@ -35,6 +35,11 @@ def predict(art: Dict[str, Any], X: np.ndarray) -> np.ndarray:
     return np.clip(art["calibrator"].predict(raw), 0.0, 1.0)
 
 
+def margin(art: Dict[str, Any], X: np.ndarray) -> np.ndarray:
+    """Uncalibrated log-odds of the booster. Unlike predict(), it does not saturate at 0/1, so small changes stay visible."""
+    return _booster(art).predict(np.asarray(X, dtype=np.float32).reshape(-1, len(FEATURE_ORDER)), raw_score=True)
+
+
 def contributions(art: Dict[str, Any], vec: Sequence[float]) -> List[Tuple[str, float]]:
     c = _booster(art).predict(np.asarray([vec], dtype=np.float32), pred_contrib=True)[0][:-1]
     return sorted(zip(art["feature_order"], map(float, c)), key=lambda kv: kv[1], reverse=True)

@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional, Union
 import numpy as np
 
 from qrshield.capture.decode import bytes_to_cv2_image
-from qrshield.cv_layer import evidence, model as CM
+from qrshield.cv_layer import evidence, model as CM, saliency
 from qrshield.cv_layer.features import FEATURE_ORDER
 from qrshield.cv_layer.measure import measure
 from qrshield.cv_layer.second_photo import differential_cue
@@ -65,7 +65,8 @@ def _explain(art: Dict[str, Any], vec: np.ndarray, geom: Dict[str, Any]) -> List
 
 
 def analyze(img: Union[bytes, np.ndarray], img2: Union[bytes, np.ndarray, None] = None,
-            corners: Optional[np.ndarray] = None) -> Dict[str, Any]:
+            corners: Optional[np.ndarray] = None, explain: bool = False) -> Dict[str, Any]:
+    """`explain=True` additionally runs the occlusion-sensitivity map (details["saliency"]); it costs ~2 s."""
     if img is None or (isinstance(img, (bytes, bytearray)) and not img):
         return _result(0.0, "low_quality", [_sig("empty_input", None, "No image data provided.", "info")])
     try:
@@ -128,4 +129,8 @@ def analyze(img: Union[bytes, np.ndarray], img2: Union[bytes, np.ndarray, None] 
 
     overlay, legend = evidence.render(m["rect"], m["geom"], score)
     details["legend"] = legend
+    if explain:
+        q = m["quality"]
+        details["saliency"] = saliency.explain(art, m["rect"], m["coverage"], q["qr_side_length_px"] or 0.0,
+                                               q["skew_ratio"] or 1.0)
     return _result(score, status, signals, overlay, **details)

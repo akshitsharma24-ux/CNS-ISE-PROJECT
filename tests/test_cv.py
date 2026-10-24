@@ -103,3 +103,26 @@ def test_model_separates_unseen_sessions():
     assert roc_auc_score(y, p) > 0.80
     easy = [s for lab, s, st in rows if lab == 1]
     assert np.mean([s >= 0.5 for s in easy]) > 0.6
+
+
+def test_explain_adds_an_occlusion_map_only_when_asked():
+    sc = render_scene(4243, label=1, surface="metal", style="offset_rotated", session=2)
+    data = encode(sc.image, ".jpg")
+    assert "saliency" not in analyze(data)["details"]
+    r = analyze(data, explain=True)
+    sal = r["details"]["saliency"]
+    assert sal["png_b64"].startswith("data:image/png;base64,") and sal["method"].startswith("occlusion")
+    assert sal["peak"] >= 0.0 and isinstance(sal["hot_spot"], bool)
+    assert r["score"] == analyze(data)["score"], "explaining must not change the verdict"
+
+
+def test_occlusion_map_blames_the_sticker_region_not_the_background():
+    from qrshield.cv_layer import model as CM, saliency
+    sc = render_scene(4245, label=1, surface="wood", style="offset_rotated", session=4)
+    m = measure(sc.image)
+    q = m["quality"]
+    res = saliency.occlusion_map(CM.active(), m["rect"], m["coverage"], q["qr_side_length_px"], q["skew_ratio"])
+    assert res["map"].shape == (S, S) and np.isfinite(res["map"]).all()
+    centre = res["map"][M - 40:M + Q + 40, M - 40:M + Q + 40]
+    corner = res["map"][:60, :60]
+    assert centre.max() >= corner.max(), "evidence for tampering should concentrate around the code, not in a far corner"

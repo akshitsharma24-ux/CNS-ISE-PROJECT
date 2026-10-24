@@ -134,7 +134,7 @@ def _layers(url_res, cv_res, sig_res) -> Dict[str, Any]:
     }
 
 
-def run_scan(registry: Registry, img_bytes: bytes, img2_bytes: Optional[bytes]) -> Dict[str, Any]:
+def run_scan(registry: Registry, img_bytes: bytes, img2_bytes: Optional[bytes], explain: bool = False) -> Dict[str, Any]:
     """The full pipeline: M0 decode -> M1/M2/M3 -> M4 fusion."""
     timings: Dict[str, float] = {}
     t0 = time.perf_counter()
@@ -150,7 +150,7 @@ def run_scan(registry: Registry, img_bytes: bytes, img2_bytes: Optional[bytes]) 
     cv_res = _guarded(timings, "visual", analyze_cv, {
         "score": 0.0, "status": "low_quality", "heatmap_png_b64": None, "details": {},
         "signals": [{"name": "layer_failed", "value": None, "direction": "info", "text": "The visual check failed on this photo."}]},
-        m0["image"], img2_bytes, m0["corners_np"])
+        m0["image"], img2_bytes, m0["corners_np"], explain)
     if m0["multi_code"] and not any(s["name"] == "stacked_code_pattern" for s in cv_res["signals"]):
         cv_res["signals"].insert(0, {"name": "stacked_code_pattern", "value": True, "direction": "risk",
                                      "text": m0.get("multi_code_details") or "Two QR patterns overlap in the frame."})
@@ -232,12 +232,13 @@ def create_app(home: Optional[Path] = None, seed_demo: bool = True, trust_store:
                 "secure_context_hint": "Phone cameras need HTTPS; run `python -m qrshield serve --https`."}
 
     @api.post("/scan", dependencies=[limit("scan", 40)])
-    async def scan(image: UploadFile = File(...), image2: Optional[UploadFile] = File(None)):
+    async def scan(image: UploadFile = File(...), image2: Optional[UploadFile] = File(None),
+                   explain: bool = Query(False, description="also compute the occlusion-sensitivity map (slower)")):
         data = await read_upload(image)
         if not data:
             raise HTTPException(status_code=400, detail="Empty image upload.")
         data2 = await read_upload(image2)
-        return await run_in_threadpool(run_scan, registry, data, data2 or None)
+        return await run_in_threadpool(run_scan, registry, data, data2 or None, explain)
 
     @api.post("/check", dependencies=[limit("check", 120)])
     async def check(req: CheckRequest):

@@ -60,6 +60,15 @@ function visualCard(cv, textOnly) {
       cv.details?.legend?.length ? el("ul", { class: "legend" }, cv.details.legend.map((l) =>
         el("li", {}, el("i", { class: `lg-${l.color.slice(1)}`, dataset: { c: l.color } }), l.label))) : null));
   }
+  const sal = cv.details?.saliency;
+  if (sal?.png_b64) {
+    kids.push(el("div", { class: "evidence saliency" },
+      el("img", { src: sal.png_b64, alt: "Occlusion-sensitivity map: red regions pushed the model towards 'tampered', blue towards 'genuine'" }),
+      el("p", { class: "muted small", text: sal.hot_spot
+        ? `Where the AI looked: the strongest evidence sits ${sal.hot_spot_where}. Red pushed the model towards "tampered", blue towards "genuine".`
+        : "Where the AI looked: no single region dominates the decision." }),
+      el("p", { class: "muted small", text: `Method: ${sal.method}.` })));
+  }
   const status = { ok: "Assessed", inconclusive: "Borderline - second photo advised", low_quality: "Photo quality too low to judge" }[cv.status] || cv.status;
   return layerCard({ badge: "M2", cls: "m2", title: "Sticker check", meta: status, pill, children: kids });
 }

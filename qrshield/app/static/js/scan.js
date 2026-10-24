@@ -91,7 +91,8 @@ async function scan() {
   form.append("image", state.file);
   if (state.file2) form.append("image2", state.file2);
   try {
-    const data = await api("/api/scan", { method: "POST", form });
+    const explain = $("#explain-toggle")?.checked ? "?explain=true" : "";
+    const data = await api(`/api/scan${explain}`, { method: "POST", form });
     handleResult(data);
   } catch (e) {
     toast(e.message, "err");
