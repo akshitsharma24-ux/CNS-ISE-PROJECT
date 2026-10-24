@@ -76,7 +76,7 @@ def page(browser, server):
     errors = []
     page.on("pageerror", lambda e: errors.append(str(e)))
     page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
-    page.goto(server)
+    page.goto(f"{server}/#scan")
     page.wait_for_selector("#scenario-list .scenario")
     yield page
     assert not [e for e in errors if "Failed to load resource" not in e], errors
@@ -90,7 +90,7 @@ def verdict(page, timeout=60000):
 
 def test_page_loads_with_nav_and_models(page):
     assert page.title().startswith("QRshield")
-    assert page.locator("[data-nav]").count() == 4
+    assert page.locator("[data-nav]").count() == 8
     page.wait_for_selector("#model-chip:has-text('link')")
 
 
@@ -211,7 +211,7 @@ def test_live_camera_start_capture_scan_roundtrip(browser, server):
     """localhost is a secure context, so getUserMedia works; the fake camera shows a test pattern (no QR)."""
     ctx = browser.new_context(permissions=["camera"], viewport={"width": 1280, "height": 900})
     page = ctx.new_page()
-    page.goto(server)
+    page.goto(f"{server}/#scan")
     page.click("[data-source=camera]")
     assert page.locator("#camera-notice").is_hidden(), "no HTTPS warning on localhost"
     page.click("#camera-start")
@@ -227,7 +227,7 @@ def test_camera_tab_explains_the_https_requirement_on_insecure_origins(browser, 
     """On http://<LAN-IP> getUserMedia is unavailable; the UI must say why instead of failing silently."""
     ctx = browser.new_context()
     page = ctx.new_page()
-    page.goto(server)
+    page.goto(f"{server}/#scan")
     page.add_init_script("Object.defineProperty(window, 'isSecureContext', {get: () => false});")
     page.reload()
     page.click("[data-source=camera]")
@@ -240,7 +240,7 @@ def test_camera_tab_explains_the_https_requirement_on_insecure_origins(browser, 
 def test_theme_toggle_and_mobile_layout(browser, server):
     ctx = browser.new_context(viewport={"width": 390, "height": 800}, is_mobile=True)
     p = ctx.new_page()
-    p.goto(server)
+    p.goto(f"{server}/#scan")
     p.wait_for_selector("#scenario-list .scenario")
     assert p.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1"), "no horizontal scrolling on a phone"
     before = p.evaluate("getComputedStyle(document.body).backgroundColor")
