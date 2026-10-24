@@ -483,3 +483,10 @@ details.more[open] > summary { color: var(--text); }
 /* spacing helper for stacked blocks on inner pages */
 .sec-gap { margin-top: 32px; }
 .view .section-head.sec-gap { margin-bottom: 22px; }
+
+/* model health */
+.hist-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 10px 0; }
+.hist { display: flex; align-items: flex-end; gap: 2px; height: 70px; border-bottom: 1px solid var(--border); }
+.hist span { flex: 1; background: var(--muted); border-radius: 2px 2px 0 0; min-height: 2px; }
+.hist.cur span { background: var(--accent); }
+.hist-pair small { display: block; margin-top: 4px; color: var(--muted); font-size: .75rem; }

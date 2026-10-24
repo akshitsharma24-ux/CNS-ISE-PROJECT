@@ -372,6 +372,11 @@
               <div class="table-wrap"><table class="table compact" id="model-table"><thead><tr><th>Version</th><th>Status</th><th>AUC</th><th>FPR</th><th>Note</th></tr></thead><tbody></tbody></table></div>
             </div>
             <div class="card">
+              <div class="card-head"><h2>Model health</h2><span id="health-chip" class="chip">checking</span></div>
+              <p class="muted small">Are recent link scores still distributed like the benchmark the model was validated on? Measured with the Population Stability Index (PSI) over anonymous scan scores.</p>
+              <div id="health-body" class="health"></div>
+            </div>
+            <div class="card">
               <div class="card-head"><h2>Audit trail</h2></div>
               <ul id="audit-list" class="audit"></ul>
             </div>

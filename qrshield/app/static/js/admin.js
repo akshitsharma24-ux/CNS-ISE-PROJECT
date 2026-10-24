@@ -21,6 +21,33 @@ async function loadOverview() {
     stat(s.latency_ms_p95 !== null ? `${s.latency_ms_p95} ms` : "-", "95th percentile"));
 }
 
+const HEALTH_CHIP = { stable: ["safe", "Stable"], moderate_shift: ["warn", "Moderate shift"], significant_shift: ["block", "Significant shift"], insufficient_data: ["", "Not enough data"] };
+
+function histogram(values, cls) {
+  const peak = Math.max(...values, 0.01);
+  return el("div", { class: `hist ${cls}`, role: "img", "aria-label": `Score histogram: ${values.map((v) => `${Math.round(v * 100)}%`).join(", ")}` },
+    values.map((v) => { const bar = el("span", { title: `${Math.round(v * 100)}%` }); bar.style.height = `${Math.max(v / peak, 0.02) * 100}%`; return bar; }));
+}
+
+async function loadHealth() {
+  $("#health-body").textContent = "Measuring the reference distribution (first time only, ~15 s)...";
+  const h = await api("/api/admin/model-health", { admin: true });
+  const [cls, label] = HEALTH_CHIP[h.status] || ["", h.status];
+  const chip = $("#health-chip");
+  chip.className = `chip ${cls}`.trim();
+  chip.textContent = h.psi !== null ? `${label} - PSI ${h.psi}` : label;
+  const rows = [["Recent web-link scans", h.n_recent]];
+  if (h.psi !== null) {
+    rows.push(["Mean link risk (recent vs benchmark)", `${h.recent.mean} vs ${h.reference.mean}`], ["Share flagged >= 0.5", `${Math.round(h.recent.flagged_share * 100)}%`]);
+  }
+  $("#health-body").replaceChildren(
+    el("div", { class: "hist-pair" },
+      el("div", {}, histogram(h.reference.histogram, "ref"), el("small", { text: "benchmark (0 to 1)" })),
+      el("div", {}, histogram(h.recent.histogram, "cur"), el("small", { text: "recent scans" }))),
+    el("dl", { class: "kv" }, rows.flatMap(([k, v]) => [el("dt", { text: k }), el("dd", { text: String(v) })])),
+    el("p", { class: "muted small", text: h.message }));
+}
+
 function labelChip(label) {
   return el("span", { class: `chip ${label === "benign" ? "safe" : "block"}`, text: label });
 }
@@ -118,4 +145,5 @@ export async function enterAdmin() {
   gate.hidden = true;
   body.hidden = false;
   try { await Promise.all([loadOverview(), loadReports(), loadModels(), loadAudit()]); } catch (e) { toast(e.message, "err"); }
+  loadHealth().catch((e) => { $("#health-body").textContent = e.message; });
 }

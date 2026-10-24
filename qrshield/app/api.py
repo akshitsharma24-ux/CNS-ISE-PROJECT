@@ -31,7 +31,7 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 import qrshield
-from qrshield import config, model_store, retrain
+from qrshield import config, model_store, monitoring, retrain
 from qrshield.app import demo
 from qrshield.app.security import RateLimiter, SecurityHeaders, limit, read_upload, require_admin
 from qrshield.capture import capture_and_decode
@@ -351,6 +351,13 @@ def create_app(home: Optional[Path] = None, seed_demo: bool = True, trust_store:
     def admin_models():
         return {"active": {"url": model_store.active_version("url"), "cv": model_store.active_version("cv")},
                 "history": registry.list_model_versions(), "retrain": retrain.status()}
+
+    @admin.get("/model-health")
+    async def admin_model_health():
+        """Drift of recent link-risk scores against the benchmark reference (Population Stability Index)."""
+        def _health():
+            return monitoring.health(registry.recent_url_scores(), monitoring.reference_scores(registry.home))
+        return await run_in_threadpool(_health)
 
     @admin.post("/retrain")
     def admin_retrain():

@@ -397,6 +397,12 @@ class Registry:
         return {"scans_total": total, "by_verdict": by_verdict, "reports_pending": pending,
                 "latency_ms_p50": pct(0.50), "latency_ms_p95": pct(0.95)}
 
+    def recent_url_scores(self, limit: int = 1000) -> List[float]:
+        """Link-risk scores of the most recent scans of web links (anonymous telemetry; used for drift monitoring)."""
+        with self.session() as db:
+            return [float(x) for x in db.scalars(select(ScanLog.url_risk).where(ScanLog.payload_type == "url")
+                                                 .order_by(ScanLog.created_at.desc()).limit(limit)).all()]
+
     def audit_log(self, limit: int = 100) -> List[Dict[str, Any]]:
         with self.session() as db:
             rows = db.scalars(select(AuditLog).order_by(AuditLog.id.desc()).limit(limit)).all()
