@@ -1,5 +1,6 @@
 // Entry point: hash router, theme, health chip, "How it works" results.
 import { api } from "./api.js";
+import { enterArchitecture, initArchitecture } from "./architecture.js";
 import { enterAdmin, initAdmin, leaveAdmin } from "./admin.js";
 import { enterIssuer, initIssuer } from "./issuer.js";
 import { enterLab, initLab } from "./lab.js";
@@ -21,7 +22,7 @@ function route() {
   if (view === "issuer") enterIssuer();
   if (view === "lab") enterLab();
   if (view === "admin") enterAdmin();
-  if (view === "how") loadResults();
+  if (view === "how") { loadResults(); enterArchitecture(); }
   window.scrollTo({ top: 0 });
 }
 
@@ -93,6 +94,7 @@ initScan();
 initIssuer();
 initLab();
 initAdmin();
+initArchitecture();
 window.addEventListener("hashchange", route);
 route();
 loadHealth();

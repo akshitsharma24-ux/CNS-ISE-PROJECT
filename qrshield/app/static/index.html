@@ -423,6 +423,14 @@
 
     <section id="view-how" class="view" data-view="how" hidden>
       <div class="page-head"><span class="eyebrow">How it works</span><h1>Three layers, one honest verdict</h1><p>What each layer measures, how the results are fused, and what QRshield cannot do.</p></div>
+      <div class="card arch" id="arch-card">
+        <div class="card-head"><h2>System architecture</h2><button id="arch-run" class="btn sm primary" type="button"><svg class="icon"><use href="#i-qr"/></svg>Run a sample scan</button></div>
+        <p class="muted small">Every scan follows this path. Click any component to see what it does, where its code lives and what it hands on. The sample scan sends a real photo through the live pipeline and shows how long each stage took.</p>
+        <div class="arch-layout">
+          <div id="arch-diagram" class="arch-diagram" aria-label="System architecture diagram"></div>
+          <div class="arch-side"><div id="arch-detail" class="arch-detail" aria-live="polite"></div><p id="arch-status" class="muted small" role="status"></p></div>
+        </div>
+      </div>
       <div class="how-grid">
         <div class="card prose">
           <h2>Why scanning a QR code is risky</h2>
