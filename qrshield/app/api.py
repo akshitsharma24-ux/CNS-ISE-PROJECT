@@ -36,9 +36,11 @@ from qrshield.app import demo
 from qrshield.app.security import RateLimiter, SecurityHeaders, limit, read_upload, require_admin
 from qrshield.capture import capture_and_decode
 from qrshield.crypto_layer import TrustStore, verify as verify_crypto
+from qrshield.crypto_layer.trace import trace as trace_verification
 from qrshield.cv_layer import analyze as analyze_cv
 from qrshield.engine import decide
 from qrshield.registry import Registry, RegistryError
+from qrshield.registry.lab import run_attacks
 from qrshield.url_layer import analyze as analyze_url
 
 
@@ -92,6 +94,11 @@ class SignRequest(BaseModel):
 
 class VerifyRequest(BaseModel):
     payload: str = Field(min_length=1, max_length=config.MAX_PAYLOAD_CHARS)
+
+
+class AttackRequest(BaseModel):
+    issuer_id: str = Field(min_length=2, max_length=63)
+    url: Optional[str] = Field(None, min_length=8, max_length=1500)
 
 
 # ----------------------------------------------------------------------------- helpers
@@ -283,6 +290,24 @@ def create_app(home: Optional[Path] = None, seed_demo: bool = True, trust_store:
     def registry_verify(req: VerifyRequest):
         return verify_crypto(req.payload, registry.store)
 
+    @api.post("/registry/inspect", dependencies=[limit("verify", 120)])
+    def registry_inspect(req: VerifyRequest):
+        """Token inspector: the verification replayed step by step (public data only)."""
+        return _py(trace_verification(req.payload.strip(), registry.store))
+
+    @api.get("/registry/log")
+    def registry_log():
+        """Transparency log: every certificate-lifecycle event as a Merkle leaf, plus a root-signed tree head."""
+        return registry.log_snapshot()
+
+    @api.get("/registry/log/proof/{index}")
+    def registry_log_proof(index: int):
+        return registry.log_inclusion(index)
+
+    @api.get("/registry/log/consistency")
+    def registry_log_consistency(first: int = Query(ge=1, le=1_000_000)):
+        return registry.log_consistency(first)
+
     @api.get("/demo/scenarios")
     def demo_scenarios():
         return demo.SCENARIOS
@@ -330,6 +355,11 @@ def create_app(home: Optional[Path] = None, seed_demo: bool = True, trust_store:
     def admin_rotate(issuer_id: str):
         res = registry.rotate_issuer_key(issuer_id)
         return {"success": True, "crl_version": res["crl_version"], "certificate": res["certificate"]}
+
+    @admin.post("/lab/attacks")
+    async def admin_attack_lab(req: AttackRequest):
+        """Forge ten kinds of malicious signed codes and run each through the live verifier."""
+        return await run_in_threadpool(run_attacks, registry, req.issuer_id, req.url)
 
     @admin.post("/sign")
     def admin_sign(req: SignRequest):

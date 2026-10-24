@@ -32,6 +32,9 @@ from qrshield.crypto_layer import (
     sign_url_token,
     validate_certified_domain,
 )
+from qrshield.crypto_layer.transparency import (
+    consistency_proof, inclusion_proof, leaf_hash, merkle_root, sign_tree_head,
+)
 from qrshield.registry.keystore import Keystore
 from qrshield.registry.models import (
     AuditLog, Base, CRLRecord, IssuerRecord, KeyRevocation, ModelVersion, ScanLog, ScanReport,
@@ -402,6 +405,52 @@ class Registry:
         with self.session() as db:
             return [float(x) for x in db.scalars(select(ScanLog.url_risk).where(ScanLog.payload_type == "url")
                                                  .order_by(ScanLog.created_at.desc()).limit(limit)).all()]
+
+    # ------------------------------------------------------------------ transparency log
+    LOG_ACTIONS = ("issuer.register", "issuer.revoke", "issuer.restore", "issuer.rotate")
+
+    def _log_entries(self) -> List[Dict[str, Any]]:
+        """Certificate-lifecycle events in the order they happened; each is one leaf of the Merkle tree."""
+        with self.session() as db:
+            rows = db.scalars(select(AuditLog).where(AuditLog.action.in_(self.LOG_ACTIONS)).order_by(AuditLog.id)).all()
+        return [{"index": i, "time": r.created_at, "action": r.action, "subject": r.subject, "detail": r.detail or ""}
+                for i, r in enumerate(rows)]
+
+    @staticmethod
+    def log_leaf_data(entry: Dict[str, Any]) -> bytes:
+        """Canonical bytes of one entry. The browser rebuilds exactly this string to re-check inclusion."""
+        body = {"action": entry["action"], "detail": entry["detail"], "subject": entry["subject"], "time": entry["time"]}
+        return json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+    def _log_hashes(self, entries: List[Dict[str, Any]]) -> List[bytes]:
+        return [leaf_hash(self.log_leaf_data(e)) for e in entries]
+
+    def log_snapshot(self) -> Dict[str, Any]:
+        entries = self._log_entries()
+        hashes = self._log_hashes(entries)
+        root = merkle_root(hashes)
+        head = sign_tree_head(len(entries), root, int(time.time()), self._root_priv)
+        return {"head": head, "root_public_key": self.root_public_key_b64,
+                "entries": [{**e, "leaf_hash": h.hex()} for e, h in zip(entries, hashes)]}
+
+    def log_inclusion(self, index: int) -> Dict[str, Any]:
+        entries = self._log_entries()
+        if not 0 <= index < len(entries):
+            raise RegistryError("no such log entry", status=404)
+        hashes = self._log_hashes(entries)
+        root = merkle_root(hashes)
+        return {"entry": entries[index], "leaf_hash": hashes[index].hex(), "index": index, "size": len(entries),
+                "root_hash": root.hex(), "path": [h.hex() for h in inclusion_proof(index, hashes)],
+                "head": sign_tree_head(len(entries), root, int(time.time()), self._root_priv)}
+
+    def log_consistency(self, first: int) -> Dict[str, Any]:
+        """Proof that the log as it was at size `first` is a prefix of the log today."""
+        entries = self._log_entries()
+        if not 0 < first <= len(entries):
+            raise RegistryError("first must be between 1 and the current log size", status=400)
+        hashes = self._log_hashes(entries)
+        return {"first": first, "second": len(entries), "first_root": merkle_root(hashes[:first]).hex(),
+                "second_root": merkle_root(hashes).hex(), "path": [h.hex() for h in consistency_proof(first, hashes)]}
 
     def audit_log(self, limit: int = 100) -> List[Dict[str, Any]]:
         with self.session() as db:
