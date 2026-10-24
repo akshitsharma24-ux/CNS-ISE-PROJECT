@@ -141,6 +141,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("train-url", help="retrain the link model from data/url")
     sub.add_parser("train-cv", help="retrain the sticker model (add --real DIR for real photos)")
     sub.add_parser("evaluate", help="end-to-end evaluation and ablation")
+    sub.add_parser("robustness", help="stress-test the sticker model under camera degradations; measure calibration")
     sub.add_parser("demo-assets", help="write printable QR codes for the live demo")
     sub.add_parser("blocklist-update", help="refresh the local OpenPhish blocklist cache")
     args, extra = ap.parse_known_args(argv)
@@ -163,6 +164,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_module("qrshield.cv_layer.train", *extra)
     if args.cmd == "evaluate":
         return _run_module("scripts.evaluate", *extra)
+    if args.cmd == "robustness":
+        return _run_module("scripts.robustness_eval", *extra)
     if args.cmd == "demo-assets":
         return _run_module("scripts.make_demo_assets", *extra)
     if args.cmd == "blocklist-update":

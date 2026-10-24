@@ -140,6 +140,31 @@ def cv_section(c: Dict[str, Any]) -> str:
     return "\n".join(s)
 
 
+def robustness_section(r: Dict[str, Any]) -> str:
+    if not r:
+        return "_Run `python -m qrshield robustness` to generate this section._\n"
+    s = ["### 2.8 Robustness to camera degradations and calibration\n"]
+    s.append(f"> **Simulated photos.** {r['n_scenes']} held-out scenes ({r['n_per_class']} genuine, {r['n_per_class']} tampered; seeds and sessions never used in training), each degraded by nine camera faults at three severities and pushed through the real `cv_layer.analyze`. "
+             "*Abstain* is the share of photos the layer refused to judge and asked to retake - the safe failure mode.\n")
+    c = r["clean"]
+    s.append(f"Clean photos: ROC-AUC **{c['roc_auc']}**, recall {pct(c['recall'])}, false alarms {pct(c['false_positive_rate'])}, abstain {pct(c['abstain_rate'])}.\n")
+    rows = []
+    for name, sevs in r["conditions"].items():
+        row = [name]
+        for sev in ("1", "2", "3"):
+            v = sevs[sev]
+            row.append(f"{v['roc_auc']} / {pct(v['recall'])} / {pct(v['false_positive_rate'])} / {pct(v['abstain_rate'])}")
+        rows.append(row)
+    s.append(table(["Degradation", "Mild: AUC / recall / FPR / abstain", "Moderate", "Severe"], rows))
+    n, sev, auc = r["worst_case"]
+    s.append(f"Worst case: **{n}**, severity {sev}, ROC-AUC {auc} (clean {c['roc_auc']}).\n")
+    cal = r["calibration_clean"]
+    s.append(f"**Calibration** (clean photos, {cal['n']} scored): Expected Calibration Error **{cal['ece']}**, largest bin gap {cal['mce']}, Brier score {cal['brier']}. "
+             "ECE is the average gap between the score a photo gets and the share of such photos that really are tampered; 0 would be perfectly calibrated.\n")
+    s.append(table(["Score bin", "n", "Mean score", "Observed tampered rate"], [[f"{b['lo']}-{b['hi']}", b["n"], b["mean_score"], b["observed_rate"]] for b in cal["bins"]]))
+    return "\n".join(s)
+
+
 def system_section(m: Dict[str, Any]) -> str:
     if not m:
         return "_Run `python -m qrshield evaluate` to generate this section._\n"
@@ -203,7 +228,7 @@ def main() -> None:
                 ["M3 signatures", "Real Ed25519 / PKI code paths", "Exact: forged, edited, expired, revoked, rolled-back and cross-domain tokens are rejected (see `tests/test_crypto.py`, `tests/test_redteam.py`)"],
                 ["Fusion", "Real pipeline on simulated photos", "Tests the design, not field accuracy"]]),
             "Reproduce: `python -m qrshield data && python -m qrshield train-url && python -m qrshield train-cv && python -m qrshield evaluate && python -m scripts.make_eval_report`.\n"]
-    body = [url_section(u, corpus), cv_section(c), system_section(m)]
+    body = [url_section(u, corpus), cv_section(c) + ("\n" + robustness_section(load("cv_robustness.json")) if c else ""), system_section(m)]
     body.append("## 4. Security tests\n\n"
                 "Executed by `python -m pytest` (see `tests/`): signature forgery, token field tampering, cross-domain signing, expired/revoked/rotated keys, CRL rollback and forged CRLs, "
                 "certificate-cache poisoning, fail-closed without a pinned root, SSRF (private/loopback/link-local/metadata/IPv4-mapped/6to4/NAT64 addresses, numeric spellings, DNS rebinding, redirect re-validation, a real pinned-connection test), "

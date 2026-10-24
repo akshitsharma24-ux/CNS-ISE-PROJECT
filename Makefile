@@ -3,7 +3,7 @@ PY ?= python
 VENV ?= .venv
 BIN := $(VENV)/bin
 
-.PHONY: setup demo https test data train-url train-cv evaluate demo-assets doctor clean
+.PHONY: setup demo https test data train-url train-cv evaluate robustness demo-assets doctor clean
 
 setup:
 	$(PY) -m venv $(VENV)
@@ -35,6 +35,9 @@ train-cv:
 
 evaluate:
 	$(BIN)/python -m qrshield evaluate
+
+robustness:
+	$(BIN)/python -m qrshield robustness
 
 demo-assets:
 	$(BIN)/python -m qrshield demo-assets

@@ -182,6 +182,40 @@ All features: 0.8805. Baselines (same protocol): logistic_regression 0.8038, ran
 
 Honest finding: a second photo helps mainly by averaging two independent looks (and by the consistency check that both photos decode to the same payload). The physics-inspired differential cue separates tampered from genuine scenes only weakly (mean 0.3864 vs 0.2833), so the evaluation selected weight 0.0 and it is switched off. On the 62 borderline photos accuracy was 66.1% with one photo and 66.1% with two - no gain.
 
+### 2.8 Robustness to camera degradations and calibration
+
+> **Simulated photos.** 100 held-out scenes (50 genuine, 50 tampered; seeds and sessions never used in training), each degraded by nine camera faults at three severities and pushed through the real `cv_layer.analyze`. *Abstain* is the share of photos the layer refused to judge and asked to retake - the safe failure mode.
+
+Clean photos: ROC-AUC **0.9111**, recall 71.7%, false alarms 6.0%, abstain 4.0%.
+
+| Degradation | Mild: AUC / recall / FPR / abstain | Moderate | Severe |
+|---|---|---|---|
+| gaussian_blur | 0.9204 / 67.4% / 4.0% / 4.0% | 0.9444 / 66.7% / 4.3% / 9.0% | 0.931 / 62.1% / 8.8% / 37.0% |
+| motion_blur | 0.9211 / 67.4% / 2.0% / 4.0% | 0.892 / 70.0% / 9.1% / 16.0% | 0.7834 / 41.2% / 22.7% / 61.0% |
+| sensor_noise | 0.9038 / 72.3% / 12.0% / 3.0% | 0.9104 / 66.0% / 8.0% / 3.0% | 0.8832 / 63.8% / 6.0% / 3.0% |
+| jpeg | 0.9109 / 70.2% / 8.0% / 3.0% | 0.9085 / 68.1% / 6.0% / 3.0% | 0.9166 / 70.2% / 8.0% / 3.0% |
+| low_light | 0.9374 / 76.1% / 6.1% / 5.0% | 0.9329 / 72.1% / 6.2% / 9.0% | 0.8577 / 57.9% / 6.8% / 18.0% |
+| low_contrast | 0.9226 / 73.9% / 10.2% / 5.0% | 0.9257 / 68.9% / 8.3% / 7.0% | 0.8971 / 61.9% / 6.7% / 13.0% |
+| downscale | 0.9126 / 67.4% / 6.0% / 4.0% | 0.9017 / 65.2% / 8.2% / 5.0% | 0.9275 / 63.0% / 4.1% / 5.0% |
+| tilt | 0.9167 / 69.6% / 8.0% / 4.0% | 0.9085 / 69.6% / 6.0% / 4.0% | 0.8733 / 62.2% / 8.0% / 5.0% |
+| glare_spot | 0.9008 / 69.6% / 16.3% / 5.0% | 0.8696 / 66.7% / 10.2% / 6.0% | 0.7837 / 59.5% / 19.1% / 11.0% |
+
+Worst case: **motion_blur**, severity 3, ROC-AUC 0.7834 (clean 0.9111).
+
+**Calibration** (clean photos, 96 scored): Expected Calibration Error **0.0664**, largest bin gap 0.4393, Brier score 0.1248. ECE is the average gap between the score a photo gets and the share of such photos that really are tampered; 0 would be perfectly calibrated.
+
+| Score bin | n | Mean score | Observed tampered rate |
+|---|---|---|---|
+| 0.0-0.1 | 11 | 0.0076 | 0.0 |
+| 0.1-0.2 | 4 | 0.148 | 0.0 |
+| 0.2-0.3 | 32 | 0.2471 | 0.2188 |
+| 0.3-0.4 | 8 | 0.3323 | 0.5 |
+| 0.4-0.5 | 5 | 0.4161 | 0.4 |
+| 0.5-0.6 | 3 | 0.5607 | 1.0 |
+| 0.6-0.7 | 4 | 0.6927 | 0.75 |
+| 0.8-0.9 | 7 | 0.8864 | 0.7143 |
+| 0.9-1.0 | 22 | 0.9718 | 1.0 |
+
 ## 3. End-to-end ablation (the core evidence)
 
 306 of 310 scenarios decoded and were pushed through the real pipeline (decode, M1, M2, M3, engine); 4 failed to decode. Link sources: real corpora (pirocheto benign + 2026 phishing feeds) + synthetic local-business. Photos are simulated and the sticker model was trained on the same simulator (different seeds and sessions) - this tests the *fusion design*, not field accuracy. "Flagged" means the verdict is not SAFE. Good scenarios should end SAFE; bad ones should not.
