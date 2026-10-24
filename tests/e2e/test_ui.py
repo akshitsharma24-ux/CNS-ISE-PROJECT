@@ -173,6 +173,28 @@ def test_report_then_admin_review_and_xss_is_inert(page):
     page.wait_for_selector(".toast:has-text('Approved')")
 
 
+def test_save_report_downloads_a_plain_text_evidence_file(page):
+    page.click("#scenario-list .scenario:nth-child(2)")
+    assert verdict(page) == "BLOCK"
+    with page.expect_download() as dl:
+        page.click("#save-report")
+    path = dl.value.path()
+    text = open(path, encoding="utf-8").read()
+    assert dl.value.suggested_filename.startswith("qrshield-report-") and dl.value.suggested_filename.endswith(".txt")
+    assert "Verdict        : BLOCK" in text and "SHA-256:" in text and "M3 Signature" in text and "data:image" not in text
+
+
+def test_architecture_diagram_explains_components_and_runs_a_live_scan(page):
+    page.click("[data-nav=how]")
+    page.wait_for_selector("#arch-diagram .arch-node")
+    page.click("#arch-diagram [data-node=crypto]")
+    assert "Ed25519" in page.inner_text("#arch-detail")
+    page.click("#arch-run")
+    page.wait_for_selector("#arch-status .chip", timeout=60000)
+    assert page.locator("#arch-diagram .arch-ms:visible").count() >= 4
+    assert "ms on the last scan" in page.inner_text("#arch-detail") or page.locator("#arch-diagram .arch-ms:visible").count() >= 4
+
+
 def test_crypto_lab_inspector_attack_lab_and_transparency_log(page):
     page.click("[data-nav=lab]")
     page.wait_for_selector("#log-table tbody tr")

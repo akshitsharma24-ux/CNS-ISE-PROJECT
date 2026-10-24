@@ -107,6 +107,37 @@ function working(data) {
     el("div", { class: "working" }, el("table", {}, el("tbody", {}, rows.map(([k, v]) => el("tr", {}, el("th", { text: k }), el("td", { text: String(v ?? "-") })))))));
 }
 
+// A plain-text evidence report the user can keep or attach when reporting a scam (no photo, nothing sent anywhere).
+async function saveReport(data) {
+  const d = data.decision, L = data.layers;
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(data.payload));
+  const sha = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+  const bullets = (list) => (list?.length ? list.map((s) => `  - ${s.text}`).join("\n") : "  - nothing notable");
+  const lines = [
+    "QRSHIELD SCAN REPORT", "====================", "",
+    `Scanned at     : ${new Date().toISOString()}`,
+    `Verdict        : ${d.verdict}${d.certified ? " (QRshield certified)" : ""}`,
+    `Overall risk   : ${d.risk.toFixed(2)} (0 = safe, 1 = certain attack)`,
+    "", "Destination (never opened by QRshield)", `  ${data.payload}`,
+    `  SHA-256: ${sha}`, "", "Why", ...d.reasons.map((r) => `  - ${r}`),
+    "", `M1 Link analysis   risk ${L.url_layer.score.toFixed(2)}`, bullets(L.url_layer.signals),
+    "", data.text_only || L.cv_layer.status === "not_applicable"
+      ? "M2 Sticker check   not checked (link only, no photo)"
+      : `M2 Sticker check   tamper ${L.cv_layer.score.toFixed(2)} (${L.cv_layer.status})`,
+    ...(data.text_only ? [] : [bullets(L.cv_layer.signals)]),
+    "", `M3 Signature       ${L.crypto_layer.status}${L.crypto_layer.issuer ? ` - ${L.crypto_layer.issuer.name} (${L.crypto_layer.issuer.domain})` : ""}`,
+    `  ${L.crypto_layer.detail || ""}`.trimEnd(),
+    "", `Models: link ${data.models?.url}, visual ${data.models?.cv}`,
+    "", "This report contains no photo and no personal data. It is a risk assessment, not a guarantee.",
+  ];
+  const url = URL.createObjectURL(new Blob([lines.join("\n") + "\n"], { type: "text/plain" }));
+  const a = el("a", { href: url, download: `qrshield-report-${sha.slice(0, 8)}.txt` });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
 function destination(data, onReport) {
   const verdict = data.decision.verdict;
   const isWeb = /^https?:\/\//i.test(data.payload);
@@ -135,6 +166,7 @@ function destination(data, onReport) {
   const actions = el("div", { class: "btn-row" },
     el("button", { class: "btn secondary", type: "button", onclick: () => copyText(data.payload) }, "Copy"),
     el("button", { class: "btn ghost", type: "button", onclick: onReport }, icon("flag"), "Report"),
+    el("button", { class: "btn ghost", type: "button", id: "save-report", title: "Download a plain-text evidence report (no photo)", onclick: () => saveReport(data).catch(() => {}) }, icon("upload"), "Save report"),
     openBtn);
   if (!isWeb) box.append(el("p", { class: "muted small", text: "This is not a web link, so there is nothing to open from here." }));
   if (confirmRow) box.append(confirmRow);
