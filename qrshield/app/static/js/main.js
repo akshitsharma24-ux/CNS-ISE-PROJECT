@@ -2,10 +2,11 @@
 import { api } from "./api.js";
 import { enterAdmin, initAdmin, leaveAdmin } from "./admin.js";
 import { enterIssuer, initIssuer } from "./issuer.js";
+import { enterLab, initLab } from "./lab.js";
 import { initScan, leaveScan } from "./scan.js";
 import { $, $$, el, safeStorage } from "./util.js";
 
-const VIEWS = ["home", "scan", "issuer", "admin", "how", "security", "faq", "about"];
+const VIEWS = ["home", "scan", "issuer", "lab", "admin", "how", "security", "faq", "about"];
 const store = safeStorage();
 let current = null;
 
@@ -18,6 +19,7 @@ function route() {
   $$("[data-view]").forEach((s) => { s.hidden = s.dataset.view !== view; });
   $$("[data-nav]").forEach((a) => a.classList.toggle("is-active", a.dataset.nav === view));
   if (view === "issuer") enterIssuer();
+  if (view === "lab") enterLab();
   if (view === "admin") enterAdmin();
   if (view === "how") loadResults();
   window.scrollTo({ top: 0 });
@@ -89,6 +91,7 @@ async function loadResults() {
 initTheme();
 initScan();
 initIssuer();
+initLab();
 initAdmin();
 window.addEventListener("hashchange", route);
 route();

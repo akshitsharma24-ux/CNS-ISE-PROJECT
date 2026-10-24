@@ -90,7 +90,7 @@ def verdict(page, timeout=60000):
 
 def test_page_loads_with_nav_and_models(page):
     assert page.title().startswith("QRshield")
-    assert page.locator("[data-nav]").count() == 8
+    assert page.locator("[data-nav]").count() == 9
     page.wait_for_selector("#model-chip:has-text('link')")
 
 
@@ -171,6 +171,33 @@ def test_report_then_admin_review_and_xss_is_inert(page):
     assert page.evaluate("window.__xss") is None
     page.click("#report-table button:has-text('Approve')")
     page.wait_for_selector(".toast:has-text('Approved')")
+
+
+def test_crypto_lab_inspector_attack_lab_and_transparency_log(page):
+    page.click("[data-nav=lab]")
+    page.wait_for_selector("#log-table tbody tr")
+    # transparency log: verify an entry in the browser, then "edit" it and watch the proof fail
+    page.click("#log-table tbody tr:nth-child(1) button:has-text('Verify')")
+    page.wait_for_selector("#log-proof .notice:has-text('is in the log')")
+    page.click("#log-table tbody tr:nth-child(1) button:has-text('Edit & verify')")
+    page.wait_for_selector("#log-proof .notice:has-text('tampering detected')")
+    # append-only check: the first click remembers the head, the second proves the log only grew
+    page.click("#log-consistency-btn")
+    page.click("#log-consistency-btn")
+    page.wait_for_selector("#log-consistency .chip:has-text('append-only')")
+    # attack lab needs the admin token
+    page.wait_for_selector("#attack-gate button")
+    page.click("#attack-gate button")
+    page.fill("#login-token", TOKEN)
+    page.click("#login-send")
+    page.wait_for_selector("#attack-run")
+    page.click("#attack-run")
+    page.wait_for_selector("#attack-result .notice:has-text('9 of 9')")
+    assert page.locator("#attack-result tbody tr").count() == 10
+    page.click("#attack-result tr:has-text('Edit the link') button:has-text('Inspect')")
+    page.wait_for_selector("#inspect-result .trace-step.st-fail")
+    assert "INVALID" in page.inner_text("#inspect-result .trace-head")
+    assert page.locator("#inspect-result .trace-step.st-skipped").count() >= 1
 
 
 @pytest.fixture(scope="module")

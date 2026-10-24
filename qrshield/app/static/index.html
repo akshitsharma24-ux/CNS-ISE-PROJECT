@@ -49,6 +49,7 @@
         <a href="#/how" data-nav="how">How it works</a>
         <a href="#/security" data-nav="security">Security</a>
         <a href="#/issuer" data-nav="issuer">Issuer portal</a>
+        <a href="#/lab" data-nav="lab">Crypto lab</a>
         <a href="#/admin" data-nav="admin">Admin</a>
         <a href="#/faq" data-nav="faq">FAQ</a>
         <a href="#/about" data-nav="about">About</a>
@@ -386,6 +387,40 @@
     </section>
 
     <!-- ===================================================== HOW IT WORKS -->
+    <section id="view-lab" class="view" data-view="lab" hidden>
+      <div class="page-head"><span class="eyebrow">Crypto lab</span><h1>Watch the cryptography work</h1><p>Open up a signed QR code, try to forge one, and check the registry's history yourself. Everything here runs on the real verifier.</p></div>
+      <div class="stack">
+        <div class="card" id="inspect-card">
+          <div class="card-head"><h2>Token inspector</h2><span class="chip">Ed25519</span></div>
+          <p class="muted small">Paste any link. QRshield replays the eight verification checks one by one and shows exactly what each one looked at, including the signed bytes, the public key and the signature.</p>
+          <form id="inspect-form" class="form" autocomplete="off">
+            <label class="field"><span>Signed (or unsigned) link</span><textarea id="inspect-input" class="input mono" rows="3" maxlength="1500" required placeholder="https://pay.citypark.example/m/42?qrs=..."></textarea></label>
+            <div class="btn-row end"><button id="inspect-sample" class="btn ghost" type="button">Mint a sample (admin)</button><button class="btn primary" type="submit"><svg class="icon"><use href="#i-eye"/></svg>Inspect</button></div>
+          </form>
+          <div id="inspect-result" class="inspect-result" hidden></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>Attack lab</h2><span class="chip block">live forgeries</span></div>
+          <p class="muted small">Ten attacks against a signed code: editing the link, flipping a signature bit, forging with the attacker's own key, inventing an issuer, copying a token onto a phishing link, and more. The genuine code is the control.</p>
+          <div id="attack-gate" class="card gate" hidden></div>
+          <div id="attack-body" hidden>
+            <div class="btn-row"><label class="field grow"><span>Attack a code issued by</span><select id="attack-issuer" class="input"></select></label><button id="attack-run" class="btn primary" type="button"><svg class="icon"><use href="#i-block"/></svg>Launch the attacks</button></div>
+            <div id="attack-result" hidden></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>Transparency log</h2><button id="log-refresh" class="btn sm ghost" type="button">Refresh</button></div>
+          <p class="muted small">Every certificate event (registered, revoked, restored, key rotated) is a leaf in a Merkle tree whose root the registry signs. Your browser re-computes the proofs with SHA-256, so you do not have to trust the server: an edited or deleted entry cannot match the signed root.</p>
+          <div id="log-head"></div>
+          <div class="table-wrap"><table class="table compact" id="log-table"><thead><tr><th>#</th><th>When</th><th>Event</th><th>Subject</th><th>Detail</th><th></th></tr></thead><tbody></tbody></table></div>
+          <div id="log-proof" hidden></div>
+          <div class="btn-row"><button id="log-consistency-btn" class="btn secondary" type="button">Check the log is append-only</button><span id="log-consistency" class="muted small" role="status"></span></div>
+        </div>
+      </div>
+    </section>
+
     <section id="view-how" class="view" data-view="how" hidden>
       <div class="page-head"><span class="eyebrow">How it works</span><h1>Three layers, one honest verdict</h1><p>What each layer measures, how the results are fused, and what QRshield cannot do.</p></div>
       <div class="how-grid">
